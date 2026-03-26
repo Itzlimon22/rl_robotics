@@ -1,0 +1,291 @@
+<mujoco model="halcyon">
+
+  <!--
+    Halcyon X4-AUV — MJCF model
+    ════════════════════════════
+    Spindle (prolate spheroid) body, 1.0m long, 0.15m diameter.
+    4 thrusters in X-configuration at rear, ±45° around the roll axis.
+    Neutrally buoyant: gravity disabled, buoyancy applied externally in Python.
+    Fluid drag, buoyancy, and water current are applied via mjcb callbacks in env.
+
+    Coordinate convention (body frame):
+      +X  = forward (nose direction)
+      +Z  = up
+      +Y  = left
+
+    Thruster layout (rear view, looking forward):
+          T_top
+      T_left   T_right
+          T_bot
+
+    Differential thrust achieves all 6 DOF:
+      Surge  (forward):   all 4 equal
+      Heave  (up/down):   T_top - T_bot
+      Sway   (left/right):T_left - T_right
+      Yaw:                T_left + T_right differential
+      Pitch:              T_top + T_bot differential
+      Roll:               coupled (minor)
+  -->
+
+  <!-- ── Compiler ─────────────────────────────────────────────── -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <!-- ── Physics options ──────────────────────────────────────── -->
+  <option
+    timestep    = "0.01"
+    gravity     = "0 0 0"
+    density     = "1000"
+    viscosity   = "0.001"
+    integrator  = "RK4"
+    solver      = "Newton"
+    iterations  = "50"
+    tolerance   = "1e-10">
+    <!-- gravity=0: buoyancy applied manually per-step in Python env -->
+    <!-- density/viscosity: water properties (informational, drag is manual) -->
+  </option>
+
+  <!-- ── Visual settings ──────────────────────────────────────── -->
+  <visual>
+    <headlight ambient="0.4 0.5 0.6" diffuse="0.6 0.7 0.8" specular="0.1 0.1 0.1"/>
+    <rgba haze="0.05 0.1 0.2 1"/>
+    <!-- deep blue-green underwater atmosphere -->
+  </visual>
+
+  <!-- ── Assets: materials ────────────────────────────────────── -->
+  <asset>
+    <material name="hull"     rgba="0.15 0.22 0.35 1.0" shininess="0.8" specular="0.6"/>
+    <material name="thruster" rgba="0.25 0.30 0.40 1.0" shininess="0.5" specular="0.4"/>
+    <material name="fin"      rgba="0.10 0.18 0.28 1.0" shininess="0.3" specular="0.2"/>
+    <material name="nose"     rgba="0.20 0.55 0.65 1.0" shininess="0.9" specular="0.7"/>
+    <!-- nose: teal accent — visually distinctive in figures -->
+    <material name="target"   rgba="0.15 0.85 0.55 0.6" shininess="0.2" specular="0.1"/>
+    <material name="water"    rgba="0.02 0.08 0.18 0.15" shininess="0.0" specular="0.0"/>
+  </asset>
+
+  <!-- ── Defaults ──────────────────────────────────────────────── -->
+  <default>
+    <joint type="free" limited="false" damping="0.01" armature="0.001"/>
+    <geom contype="1" conaffinity="1" condim="3" friction="0.4 0.01 0.01"/>
+    <motor ctrllimited="true" ctrlrange="-1 1" gear="20"/>
+    <!-- gear="20": 20N max thrust per thruster when ctrl=1 -->
+  </default>
+
+  <!-- ── World ─────────────────────────────────────────────────── -->
+  <worldbody>
+
+    <!-- Ocean volume (visual only, no collision) -->
+    <geom name  = "ocean_volume"
+          type  = "box"
+          size  = "15 15 10"
+          pos   = "0 0 0"
+          contype = "0" conaffinity = "0"
+          material= "water"
+          group   = "2"/>
+
+    <!-- Subtle grid floor for spatial reference -->
+    <geom name     = "floor"
+          type     = "plane"
+          size     = "20 20 0.1"
+          pos      = "0 0 -10"
+          contype  = "0" conaffinity = "0"
+          rgba     = "0.05 0.1 0.2 0.4"
+          group    = "2"/>
+
+    <!-- ── Halcyon body ──────────────────────────────────────── -->
+    <body name="halcyon" pos="0 0 0" euler="0 0 0">
+
+      <!-- Free joint — full 6-DOF motion in world space -->
+      <joint name="root" type="free"/>
+
+      <!-- Main hull: prolate spheroid approximated as scaled ellipsoid -->
+      <!-- size = half-lengths along x,y,z axes -->
+      <geom name     = "hull_main"
+            type     = "ellipsoid"
+            size     = "0.45 0.07 0.07"
+            pos      = "0.0 0 0"
+            material = "hull"
+            mass     = "10.0"
+            group    = "1"/>
+
+      <!-- Nose cap: smaller ellipsoid for the pointed bow -->
+      <geom name     = "nose"
+            type     = "ellipsoid"
+            size     = "0.12 0.065 0.065"
+            pos      = "0.48 0 0"
+            material = "nose"
+            mass     = "0.5"
+            group    = "1"/>
+
+      <!-- Tail fairing: small cylinder blending hull to thruster ring -->
+      <geom name     = "tail_fairing"
+            type     = "cylinder"
+            size     = "0.04 0.06"
+            pos      = "-0.44 0 0"
+            euler    = "0 1.5708 0"
+            material = "hull"
+            mass     = "0.3"
+            group    = "1"/>
+
+      <!-- ── Dorsal fin (top stabiliser) ──────────────────── -->
+      <geom name     = "fin_dorsal"
+            type     = "box"
+            size     = "0.12 0.006 0.055"
+            pos      = "-0.15 0 0.072"
+            material = "fin"
+            mass     = "0.1"
+            group    = "1"/>
+
+      <!-- ── Ventral fin (bottom stabiliser) ──────────────── -->
+      <geom name     = "fin_ventral"
+            type     = "box"
+            size     = "0.12 0.006 0.055"
+            pos      = "-0.15 0 -0.072"
+            material = "fin"
+            mass     = "0.1"
+            group    = "1"/>
+
+      <!-- ── Port fin (left stabiliser) ───────────────────── -->
+      <geom name     = "fin_port"
+            type     = "box"
+            size     = "0.12 0.055 0.006"
+            pos      = "-0.15 0.072 0"
+            material = "fin"
+            mass     = "0.1"
+            group    = "1"/>
+
+      <!-- ── Starboard fin (right stabiliser) ─────────────── -->
+      <geom name     = "fin_starboard"
+            type     = "box"
+            size     = "0.12 0.055 0.006"
+            pos      = "-0.15 -0.072 0"
+            material = "fin"
+            mass     = "0.1"
+            group    = "1"/>
+
+      <!-- ── Thruster housings (visual cylinders) ──────────── -->
+      <!-- Top thruster housing: +Z offset, -45° from top -->
+      <geom name     = "housing_top"
+            type     = "cylinder"
+            size     = "0.022 0.055"
+            pos      = "-0.46 0 0.055"
+            euler    = "0 1.5708 0"
+            material = "thruster"
+            mass     = "0.25"
+            group    = "1"/>
+
+      <!-- Bottom thruster housing -->
+      <geom name     = "housing_bot"
+            type     = "cylinder"
+            size     = "0.022 0.055"
+            pos      = "-0.46 0 -0.055"
+            euler    = "0 1.5708 0"
+            material = "thruster"
+            mass     = "0.25"
+            group    = "1"/>
+
+      <!-- Left thruster housing -->
+      <geom name     = "housing_left"
+            type     = "cylinder"
+            size     = "0.022 0.055"
+            pos      = "-0.46 0.055 0"
+            euler    = "0 1.5708 0"
+            material = "thruster"
+            mass     = "0.25"
+            group    = "1"/>
+
+      <!-- Right thruster housing -->
+      <geom name     = "housing_right"
+            type     = "cylinder"
+            size     = "0.022 0.055"
+            pos      = "-0.46 -0.055 0"
+            euler    = "0 1.5708 0"
+            material = "thruster"
+            mass     = "0.25"
+            group    = "1"/>
+
+      <!-- ── Thruster sites (force application points) ─────── -->
+      <!-- Forces applied here by Python env each step          -->
+      <!-- Axis = +X (forward) — negative ctrl = reverse thrust -->
+
+      <site name="thruster_top"
+            pos ="-0.52 0 0.055"
+            size="0.015"
+            rgba="0.2 0.9 0.5 0.8"/>
+
+      <site name="thruster_bot"
+            pos ="-0.52 0 -0.055"
+            size="0.015"
+            rgba="0.2 0.9 0.5 0.8"/>
+
+      <site name="thruster_left"
+            pos ="-0.52 0.055 0"
+            size="0.015"
+            rgba="0.2 0.9 0.5 0.8"/>
+
+      <site name="thruster_right"
+            pos ="-0.52 -0.055 0"
+            size="0.015"
+            rgba="0.2 0.9 0.5 0.8"/>
+
+      <!-- Centre of mass site (for sensor reference) -->
+      <site name="com" pos="0 0 0" size="0.01" rgba="1 0.3 0.3 0.5"/>
+
+      <!-- Nose sensor site -->
+      <site name="nose_tip" pos="0.60 0 0" size="0.008" rgba="0.2 0.8 0.9 0.6"/>
+
+      <!-- ── Sensors ─────────────────────────────────────── -->
+      <!-- All sensor data available in env via data.sensordata -->
+
+    </body><!-- /halcyon -->
+
+    <!-- ── Goal marker (moved to target pos in Python env) ──── -->
+    <body name="goal" pos="5 0 0">
+      <geom name     = "goal_sphere"
+            type     = "sphere"
+            size     = "0.15"
+            contype  = "0" conaffinity = "0"
+            material = "target"
+            group    = "1"/>
+      <site name="goal_site" pos="0 0 0" size="0.02" rgba="0.1 1.0 0.5 1.0"/>
+    </body>
+
+    <!-- ── Lights ──────────────────────────────────────────── -->
+    <light name="sun"     pos="0 0 8"  dir="0 0 -1" diffuse="0.6 0.7 0.8" specular="0.2 0.2 0.2"/>
+    <light name="ambient" pos="0 0 5"  dir="0 0 -1" diffuse="0.2 0.3 0.4" specular="0.0 0.0 0.0"/>
+
+    <!-- ── Camera ──────────────────────────────────────────── -->
+    <camera name="track"   mode="trackcom" target="halcyon" pos="3 -3 2"  euler="0 0.5 0.8"/>
+    <camera name="side"    mode="trackcom" target="halcyon" pos="0 -4 0"  euler="0 0 1.5708"/>
+    <camera name="top"     mode="trackcom" target="halcyon" pos="0 0 5"   euler="0 0 0"/>
+    <camera name="follow"  mode="trackcom" target="halcyon" pos="-2 0 0.5" euler="0 0.2 0"/>
+
+  </worldbody>
+
+  <!-- ── Actuators ─────────────────────────────────────────────── -->
+  <!--
+    4 motor actuators — one per thruster site.
+    Each applies force along the site's local X axis (forward).
+    gear="20" → max 20N per thruster at ctrl=1.
+    Total max surge: 80N. Max yaw torque: 80N × 0.055m = 4.4 Nm.
+  -->
+  <actuator>
+    <motor name="thrust_top"   site="thruster_top"   gear="20 0 0 0 0 0" ctrllimited="true" ctrlrange="-1 1"/>
+    <motor name="thrust_bot"   site="thruster_bot"   gear="20 0 0 0 0 0" ctrllimited="true" ctrlrange="-1 1"/>
+    <motor name="thrust_left"  site="thruster_left"  gear="20 0 0 0 0 0" ctrllimited="true" ctrlrange="-1 1"/>
+    <motor name="thrust_right" site="thruster_right" gear="20 0 0 0 0 0" ctrllimited="true" ctrlrange="-1 1"/>
+  </actuator>
+
+  <!-- ── Sensors ───────────────────────────────────────────────── -->
+  <sensor>
+    <!-- Position and velocity of hull body -->
+    <framepos   name="pos"      objtype="body" objname="halcyon"/>
+    <framequat  name="quat"     objtype="body" objname="halcyon"/>
+    <framelinvel name="linvel"  objtype="body" objname="halcyon"/>
+    <frameangvel name="angvel"  objtype="body" objname="halcyon"/>
+    <!-- Accelerometer at CoM -->
+    <accelerometer name="accel" site="com"/>
+    <!-- Gyroscope at CoM -->
+    <gyro          name="gyro"  site="com"/>
+  </sensor>
+
+</mujoco>
