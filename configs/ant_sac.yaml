@@ -1,0 +1,10 @@
+# configs/ant_sac.yaml
+env: Ant-v4
+algo: sac
+run_name: run_01
+total_steps: 3_000_000
+n_envs: 4
+seed: 42
+lr: 3e-4
+buffer_size: 1_000_000
+batch_size: 512
