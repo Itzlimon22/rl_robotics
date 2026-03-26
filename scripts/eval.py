@@ -9,7 +9,8 @@ import os
 import argparse
 import numpy as np
 from stable_baselines3 import SAC, TD3
-from stable_baselines3.common.vec_env import VecNormalize, make_vec_env
+from stable_baselines3.common.vec_env import VecNormalize
+from stable_baselines3.common.env_util import make_vec_env
 
 
 def get_save_dir(env_id, run_name):

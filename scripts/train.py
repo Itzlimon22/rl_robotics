@@ -15,7 +15,8 @@ import torch
 import gymnasium as gym
 from stable_baselines3 import SAC, TD3
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import VecNormalize, make_vec_env
+from stable_baselines3.common.vec_env import VecNormalize
+from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import (
     EvalCallback, CheckpointCallback, CallbackList
 )
