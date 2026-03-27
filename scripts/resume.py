@@ -205,7 +205,10 @@ def resume(args):
     print(f"  RESUMING mode={args.mode} seed={args.seed}")
     print(f"  {args.checkpoint:,} → {args.total_steps:,}  ({remaining:,} remaining)")
     print(f"  Model:   {model_path.name}")
-    print(f"  VecNorm: {vecnorm_path.name}")
+    if vecnorm_path is not None:
+        print(f"  VecNorm: {vecnorm_path.name}")
+    else:
+        print("  VecNorm: None (will reconstruct stats)")
     print(f"{'=' * 60}\n")
 
     train_env = rebuild_train_env(
