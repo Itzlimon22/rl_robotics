@@ -18,6 +18,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from auv_env import HalcyonAUVEnv
 from auv_dr_wrapper import AUVDomainRandomWrapper
+
+_SCRIPT_DIR = Path(__file__).parent.resolve()
+_REPO_ROOT = _SCRIPT_DIR.parent
+_ENVS_DIR = _REPO_ROOT / "envs"
+for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
 from train import (
     SAC_HYPERPARAMS,
     EVAL_FREQ,
@@ -28,13 +36,6 @@ from train import (
     AUVMetricsCallback,
     CDRCheckpointCallback,
 )
-
-_SCRIPT_DIR = Path(__file__).parent.resolve()
-_REPO_ROOT = _SCRIPT_DIR.parent
-_ENVS_DIR = _REPO_ROOT / "envs"
-for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 
 def find_run_dir(mode, seed, base_dir=None):
