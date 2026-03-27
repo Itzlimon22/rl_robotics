@@ -20,7 +20,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 _SCRIPT_DIR = Path(__file__).parent.resolve()
 _REPO_ROOT = _SCRIPT_DIR.parent
 _ENVS_DIR = _REPO_ROOT / "envs"
-for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
+# Insert _SCRIPT_DIR before _ENVS_DIR to prioritize scripts/train.py
+for _p in [_REPO_ROOT, _SCRIPT_DIR, _ENVS_DIR]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
