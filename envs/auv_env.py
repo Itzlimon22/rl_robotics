@@ -85,8 +85,8 @@ DEFAULT_PHYSICS = {
     # Quadratic drag coefficient (kg/m).
     # F_drag = -c_drag * v * |v| applied along each axis independently.
     # Real AUV range: 0.1 (streamlined) to 0.8 (high-drag test).
-    "c_drag_axial": 0.20,  # along body X (fore-aft, low drag)
-    "c_drag_lateral": 0.50,  # along body Y/Z (cross-flow, higher drag)
+    "c_drag_axial": 0.08,  # along body X (fore-aft, low drag)
+    "c_drag_lateral": 0.20,  # along body Y/Z (cross-flow, higher drag)
     # Buoyancy offset as fraction of total weight.
     # 0.0 = neutrally buoyant, +0.02 = 2% positive (floats up slightly).
     "buoyancy_offset": 0.02,
@@ -355,10 +355,11 @@ class HalcyonAUVEnv(Env):
 
         # Apply actuator efficiency (DR can degrade individual thrusters)
         effective_ctrl = action * self.physics_params["actuator_efficiency"]
-        self.data.ctrl[:] = -effective_ctrl
+        self.data.ctrl[:] = effective_ctrl
 
         # Simulate frame_skip steps, applying fluid forces each substep
         for _ in range(self.frame_skip):
+            self.data.xfrc_applied[:] = 0.0
             self._apply_fluid_forces()
             mujoco.mj_step(self.model, self.data)
 
@@ -649,7 +650,7 @@ class HalcyonAUVEnv(Env):
             goal_dir_body_x = goal_dir_body[0].item()  # cosine of angle to goal
 
             # penalty = 1 - cos(θ): 0 when aligned, 2 when pointing away
-            r_orient = -w["orientation"] * (1.0 + goal_dir_body_x)
+            r_orient = -w["orientation"] * (1.0 - goal_dir_body_x)
         else:
             r_orient = 0.0
 
