@@ -65,14 +65,20 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # ── Project imports ───────────────────────────────────────────────────────────
-# Add envs/ to path so imports work from any working directory
-_SCRIPT_DIR = Path(__file__).parent.resolve()
-_ENVS_DIR   = _SCRIPT_DIR / "envs"
-for _p in [_SCRIPT_DIR, _ENVS_DIR]:
+# Resolve repo root regardless of where train.py lives (scripts/ or root).
+# Structure:  ~/rl_robotics/
+#               scripts/train.py   ← __file__
+#               envs/auv_env.py
+#               envs/auv_dr_wrapper.py
+_SCRIPT_DIR = Path(__file__).parent.resolve()  # .../rl_robotics/scripts
+_REPO_ROOT = _SCRIPT_DIR.parent  # .../rl_robotics
+_ENVS_DIR = _REPO_ROOT / "envs"  # .../rl_robotics/envs
+
+for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from auv_env       import HalcyonAUVEnv
+from auv_env import HalcyonAUVEnv
 from auv_dr_wrapper import AUVDomainRandomWrapper, make_auv_env
 
 
@@ -82,27 +88,27 @@ from auv_dr_wrapper import AUVDomainRandomWrapper, make_auv_env
 # Change only if sweep results suggest otherwise.
 # ─────────────────────────────────────────────────────────────────────────────
 SAC_HYPERPARAMS = {
-    "learning_rate":         3e-4,
-    "buffer_size":           500_000,    # 500k transitions replay buffer
-    "learning_starts":       10_000,     # warm-up steps before first update
-    "batch_size":            256,
-    "tau":                   0.005,      # soft update coefficient
-    "gamma":                 0.99,       # discount factor
-    "train_freq":            1,          # update every step (off-policy)
-    "gradient_steps":        1,
-    "ent_coef":              "auto",     # automatic entropy tuning (SAC hallmark)
-    "target_entropy":        "auto",
-    "policy_kwargs":         dict(
-        net_arch=[256, 256],             # 2-layer MLP, 256 units each
+    "learning_rate": 3e-4,
+    "buffer_size": 500_000,  # 500k transitions replay buffer
+    "learning_starts": 10_000,  # warm-up steps before first update
+    "batch_size": 256,
+    "tau": 0.005,  # soft update coefficient
+    "gamma": 0.99,  # discount factor
+    "train_freq": 1,  # update every step (off-policy)
+    "gradient_steps": 1,
+    "ent_coef": "auto",  # automatic entropy tuning (SAC hallmark)
+    "target_entropy": "auto",
+    "policy_kwargs": dict(
+        net_arch=[256, 256],  # 2-layer MLP, 256 units each
         activation_fn=torch.nn.ReLU,
     ),
-    "verbose":               1,
-    "tensorboard_log":       None,       # set per-run below
+    "verbose": 1,
+    "tensorboard_log": None,  # set per-run below
 }
 
 # Eval frequency and episodes (balance between info and compute cost)
-EVAL_FREQ      = 10_000   # evaluate every 10k training steps
-N_EVAL_EPS     = 20       # 20 episodes per evaluation
+EVAL_FREQ = 10_000  # evaluate every 10k training steps
+N_EVAL_EPS = 20  # 20 episodes per evaluation
 CHECKPOINT_FREQ = 50_000  # save checkpoint every 50k steps
 
 
@@ -110,17 +116,18 @@ CHECKPOINT_FREQ = 50_000  # save checkpoint every 50k steps
 # Device detection
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def detect_device() -> str:
     """Auto-detect best available device."""
     if torch.cuda.is_available():
         device = "cuda"
-        name   = torch.cuda.get_device_name(0)
+        name = torch.cuda.get_device_name(0)
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = "mps"
-        name   = "Apple Silicon MPS"
+        name = "Apple Silicon MPS"
     else:
         device = "cpu"
-        name   = "CPU"
+        name = "CPU"
     print(f"[device] Using {device.upper()} — {name}")
     return device
 
@@ -128,6 +135,7 @@ def detect_device() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # Save path resolver
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def resolve_save_dir(mode: str, run_name: str, base_dir: Optional[str] = None) -> Path:
     """
@@ -178,12 +186,14 @@ def resolve_xml_path(xml_arg: Optional[str]) -> Path:
 # Environment factory
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def make_train_env(xml_path: str, mode: str, seed: int) -> VecNormalize:
     """
     Create the VecNormalize-wrapped training environment.
 
     Stack: HalcyonAUVEnv → AUVDomainRandomWrapper → DummyVecEnv → VecNormalize
     """
+
     def _init():
         env = HalcyonAUVEnv(xml_path=xml_path)
         env = AUVDomainRandomWrapper(env, mode=mode, seed=seed, verbose=True)
@@ -201,7 +211,9 @@ def make_train_env(xml_path: str, mode: str, seed: int) -> VecNormalize:
     return vec_env
 
 
-def make_eval_env(xml_path: str, mode: str, seed: int, vec_normalize: VecNormalize) -> VecNormalize:
+def make_eval_env(
+    xml_path: str, mode: str, seed: int, vec_normalize: VecNormalize
+) -> VecNormalize:
     """
     Create evaluation environment sharing VecNormalize statistics with training env.
 
@@ -210,6 +222,7 @@ def make_eval_env(xml_path: str, mode: str, seed: int, vec_normalize: VecNormali
         - vec_env.training = False → stats frozen during eval
         - vec_env.norm_reward = False → raw rewards for interpretable eval metrics
     """
+
     def _init():
         env = HalcyonAUVEnv(xml_path=xml_path)
         # Eval env uses same DR mode — evaluates on same distribution as training
@@ -218,16 +231,26 @@ def make_eval_env(xml_path: str, mode: str, seed: int, vec_normalize: VecNormali
         return env
 
     eval_vec = DummyVecEnv([_init])
-    # Load running stats from training env
-    eval_vec = VecNormalize.load_from_venv(vec_normalize, eval_vec)  # shares stats
-    eval_vec.training   = False   # freeze running mean/std
-    eval_vec.norm_reward = False  # raw rewards for EvalCallback mean_reward metric
+    # Wrap with VecNormalize then copy running stats from training env.
+    # Correct SB3 pattern — load_from_venv does not exist in SB3.
+    eval_vec = VecNormalize(
+        eval_vec,
+        norm_obs=True,
+        norm_reward=False,  # always False for eval — raw rewards
+        clip_obs=10.0,
+        gamma=SAC_HYPERPARAMS["gamma"],
+    )
+    # Copy observation running stats so normalisation matches training env.
+    eval_vec.obs_rms = vec_normalize.obs_rms
+    eval_vec.ret_rms = vec_normalize.ret_rms
+    eval_vec.training = False  # freeze — do not update stats during eval
     return eval_vec
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Custom callbacks
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class AUVMetricsCallback(BaseCallback):
     """
@@ -267,9 +290,13 @@ class AUVMetricsCallback(BaseCallback):
 
             # CDR metrics (only populated in curriculum mode)
             if "dr/curriculum_level" in info:
-                self.logger.record_mean("cdr/curriculum_level", info["dr/curriculum_level"])
+                self.logger.record_mean(
+                    "cdr/curriculum_level", info["dr/curriculum_level"]
+                )
             if "dr/success_rate" in info:
-                self.logger.record_mean("cdr/rolling_success_rate", info["dr/success_rate"])
+                self.logger.record_mean(
+                    "cdr/rolling_success_rate", info["dr/success_rate"]
+                )
             if "dr/c_drag_lateral" in info:
                 self.logger.record_mean("cdr/c_drag_lateral", info["dr/c_drag_lateral"])
             if "dr/current_speed" in info:
@@ -293,7 +320,7 @@ class CDRCheckpointCallback(BaseCallback):
 
     def __init__(self, save_dir: Path, save_freq: int, verbose: int = 1):
         super().__init__(verbose)
-        self.save_dir  = save_dir
+        self.save_dir = save_dir
         self.save_freq = save_freq
         self._last_save = 0
 
@@ -310,13 +337,15 @@ class CDRCheckpointCallback(BaseCallback):
             env = self.training_env.venv.envs[0]  # unwrap DummyVecEnv
             if hasattr(env, "get_cdr_state"):
                 state = env.get_cdr_state()
-                path  = self.save_dir / f"cdr_state_{self.num_timesteps}.json"
+                path = self.save_dir / f"cdr_state_{self.num_timesteps}.json"
                 with open(path, "w") as f:
                     json.dump(state, f, indent=2)
                 if self.verbose:
                     lvl = state.get("curriculum_level", 0)
-                    print(f"[CDR] Saved state at step {self.num_timesteps} "
-                          f"| level={lvl:.3f} | path={path.name}")
+                    print(
+                        f"[CDR] Saved state at step {self.num_timesteps} "
+                        f"| level={lvl:.3f} | path={path.name}"
+                    )
         except Exception as e:
             if self.verbose:
                 print(f"[CDR] Warning: could not save CDR state: {e}")
@@ -326,12 +355,13 @@ class CDRCheckpointCallback(BaseCallback):
 # Main training function
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def train(args: argparse.Namespace):
     """Full training pipeline. Called by main() or Colab."""
 
     # ── Setup ─────────────────────────────────────────────────────────────────
     t_start = time.time()
-    device  = detect_device()
+    device = detect_device()
 
     xml_path = resolve_xml_path(args.xml)
     print(f"[env]  XML: {xml_path}")
@@ -340,20 +370,22 @@ def train(args: argparse.Namespace):
     # Run name: mode_seed_timestamp for uniqueness
     run_name = args.run_name or f"{args.mode}_seed{args.seed}_{int(time.time())}"
     save_dir = resolve_save_dir(args.mode, run_name, args.save_dir)
-    tb_dir   = save_dir / "tensorboard"
+    tb_dir = save_dir / "tensorboard"
     eval_dir = save_dir / "eval"
     tb_dir.mkdir(parents=True, exist_ok=True)
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     # Save full config for reproducibility
     config = vars(args)
-    config.update({
-        "run_name":   run_name,
-        "save_dir":   str(save_dir),
-        "xml_path":   str(xml_path),
-        "device":     device,
-        "sac_hyperparams": {k: str(v) for k, v in SAC_HYPERPARAMS.items()},
-    })
+    config.update(
+        {
+            "run_name": run_name,
+            "save_dir": str(save_dir),
+            "xml_path": str(xml_path),
+            "device": device,
+            "sac_hyperparams": {k: str(v) for k, v in SAC_HYPERPARAMS.items()},
+        }
+    )
     with open(save_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
     print(f"[run]  Config saved → {save_dir / 'config.json'}")
@@ -412,11 +444,11 @@ def train(args: argparse.Namespace):
     callbacks = CallbackList([metrics_cb, eval_cb, checkpoint_cb, cdr_ckpt_cb])
 
     # ── Training ──────────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  TRAINING: mode={args.mode}  seed={args.seed}")
     print(f"  Steps: {args.steps:,}  |  Eval every {EVAL_FREQ:,} steps")
     print(f"  Save:  {save_dir}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     try:
         model.learn(
@@ -450,11 +482,11 @@ def train(args: argparse.Namespace):
 
     # ── Summary ───────────────────────────────────────────────────────────────
     elapsed = time.time() - t_start
-    print(f"\n{'='*60}")
-    print(f"  DONE — {args.steps:,} steps in {elapsed/60:.1f} min")
+    print(f"\n{'=' * 60}")
+    print(f"  DONE — {args.steps:,} steps in {elapsed / 60:.1f} min")
     print(f"  Best model: {save_dir / 'best_model.zip'}")
     print(f"  TensorBoard: tensorboard --logdir {tb_dir}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     train_env.close()
     eval_env.close()
@@ -465,34 +497,47 @@ def train(args: argparse.Namespace):
 # CLI argument parser
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Train SAC on Halcyon AUV with domain randomisation.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--mode", type=str, default="curriculum",
+        "--mode",
+        type=str,
+        default="curriculum",
         choices=["none", "uniform", "curriculum"],
         help="DR mode. 'none'=naive baseline, 'uniform'=UDR, 'curriculum'=CDR (ours)",
     )
     p.add_argument(
-        "--seed", type=int, default=0,
+        "--seed",
+        type=int,
+        default=0,
         help="Random seed. Run 0,1,2 for paper results (3 seeds each condition).",
     )
     p.add_argument(
-        "--steps", type=int, default=1_000_000,
+        "--steps",
+        type=int,
+        default=1_000_000,
         help="Total training timesteps. 1M for paper, 50k for debug.",
     )
     p.add_argument(
-        "--xml", type=str, default=None,
+        "--xml",
+        type=str,
+        default=None,
         help="Path to auv.xml. Auto-detected if not specified.",
     )
     p.add_argument(
-        "--run-name", type=str, default=None,
+        "--run-name",
+        type=str,
+        default=None,
         help="Run name suffix. Auto-generated (mode_seedN_timestamp) if not set.",
     )
     p.add_argument(
-        "--save-dir", type=str, default=None,
+        "--save-dir",
+        type=str,
+        default=None,
         help="Base save directory. Auto-detected (local or Colab Drive) if not set.",
     )
     return p
@@ -502,9 +547,10 @@ def build_parser() -> argparse.ArgumentParser:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = build_parser()
-    args   = parser.parse_args()
+    args = parser.parse_args()
     train(args)
 
 
