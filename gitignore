@@ -1,27 +1,44 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-.env
-venv/
+*.pyd
 *.egg-info/
-
-# RL artifacts (stay local / on Drive, not in git)
-*.zip
-*.pkl
-checkpoints/
-best_model/
-tb_logs/
-eval_logs/
-*.mp4
-*.gif
-
-# Mac
-.DS_Store
+*.egg
+dist/
+build/
 
 # Jupyter
 .ipynb_checkpoints/
-*.ipynb
+*.ipynb_checkpoints
 
-# Large data
-replay_buffer/
+# Training outputs
+results/
+*.zip
+*.pkl
+*.json
+*.log
+*.csv
+
+# TensorBoard
+runs/
+tensorboard/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# MuJoCo
+*.mjb
