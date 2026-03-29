@@ -142,7 +142,7 @@ DEFAULT_REWARD_WEIGHTS = {
     "energy": 0.02,  # penalise ctrl^2 (encourages efficient thrust use)
     "smoothness": 0.05,  # penalise |action - prev_action| (reduces jitter)
     "orientation": 0.5,  # penalise not facing the goal (encourages nose-toward-goal)
-    "boundary": 5.0,  # penalty for leaving the workspace
+    "boundary": 10.0,  # penalty for leaving the workspace
 }
 
 
@@ -192,9 +192,9 @@ class HalcyonAUVEnv(Env):
         frame_skip: int = 4,
         max_episode_steps: int = 500,
         goal_threshold: float = 0.5,
-        workspace_radius: float = 15.0,
-        goal_min_dist: float = 3.0,
-        goal_max_dist: float = 10.0,
+        workspace_radius: float = 12.0,
+        goal_min_dist: float = 2.0,
+        goal_max_dist: float = 6.0,
         physics_params: Optional[Dict] = None,
         reward_weights: Optional[Dict] = None,
         render_mode: Optional[str] = None,
