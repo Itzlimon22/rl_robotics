@@ -94,9 +94,9 @@ TEST_PARAM_CONFIG: Dict[str, Tuple[float, float]] = {
 # Curriculum hyperparameters
 # ══════════════════════════════════════════════════════════════════════════════
 
-CDR_WINDOW_SIZE = 50  # rolling window for success rate
-CDR_EXPAND_THRESHOLD = 0.70  # success rate above this → expand ranges
-CDR_CONTRACT_THRESHOLD = 0.40  # success rate below this → contract ranges
+CDR_WINDOW_SIZE = 20  # rolling window for success rate
+CDR_EXPAND_THRESHOLD = 0.40  # success rate above this → expand ranges
+CDR_CONTRACT_THRESHOLD = 0.20  # success rate below this → contract ranges
 CDR_EXPAND_STEP = 0.05  # fraction of full range to expand per trigger
 CDR_CONTRACT_STEP = 0.03  # fraction of full range to contract per trigger
 CDR_MIN_EPISODES = CDR_WINDOW_SIZE  # warm-up before curriculum adjusts

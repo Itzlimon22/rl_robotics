@@ -359,8 +359,12 @@ class AUVMetricsCallback(BaseCallback):
                 self.logger.record_mean("cdr/buoyancy", info["dr/buoyancy"])
 
             # Episode count (for phase plots)
+
             if done:
                 self._n_episodes += 1
+                goal_dist_at_done = info.get("goal_dist", 999)
+                success = float(goal_dist_at_done < 0.5)
+                self.logger.record_mean("env/success_rate", success)
                 self.logger.record("env/n_episodes", self._n_episodes)
 
         return True
