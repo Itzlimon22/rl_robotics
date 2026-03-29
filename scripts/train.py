@@ -130,9 +130,8 @@ SAC_HYPERPARAMS = {
     # max_grad_norm=1.0 prevents large gradient updates from destabilising
     # the critic network. Particularly important early in training when the
     # replay buffer contains mostly random rollout data with high variance.
-    "max_grad_norm": 1.0,
     "policy_kwargs": dict(
-        net_arch=[256, 256],  # 2-layer MLP, 256 units each
+        net_arch=[256, 256],
         activation_fn=torch.nn.ReLU,
     ),
     "verbose": 1,
