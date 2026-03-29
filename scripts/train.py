@@ -96,8 +96,8 @@ SAC_HYPERPARAMS = {
     "gamma": 0.99,  # discount factor
     "train_freq": 1,  # update every step (off-policy)
     "gradient_steps": 1,
-    "ent_coef": "auto",  # automatic entropy tuning (SAC hallmark)
-    "target_entropy": "auto",
+    "ent_coef": "auto_0.1",  # automatic entropy tuning (SAC hallmark)
+    "target_entropy": -1.0,
     "policy_kwargs": dict(
         net_arch=[256, 256],  # 2-layer MLP, 256 units each
         activation_fn=torch.nn.ReLU,
