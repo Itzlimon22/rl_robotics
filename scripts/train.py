@@ -500,7 +500,6 @@ def train(args: argparse.Namespace):
     print(
         f"[model] ent_coef: {hyperparams['ent_coef']}  "
         f"target_entropy: {hyperparams['target_entropy']}  "
-        f"max_grad_norm: {hyperparams['max_grad_norm']}"
     )
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
