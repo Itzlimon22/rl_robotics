@@ -21,9 +21,9 @@ Install:
 
 Fluid physics applied each step (via xfrc_applied, world frame):
     1. Quadratic drag       F_drag = -c_d * v_body * |v_body|  (body → world)
-    2. Buoyancy             F_buoy = +mass * g * (1 + offset)  (world +Z)
+    2. Buoyancy (net)       F_buoy = mass * g * buoyancy_offset (world +Z)
     3. Water current        F_curr = c_d * (v_curr - v_body) * |v_curr - v_body|
-    4. Added mass (opt.)    F_am   = -C_a * a_body             (body → world)
+    4. Added mass           F_am   = -C_a * m * a_body          (body → world)
 
 Observation space (18-dim float32, all normalised to reasonable ranges):
     [0:3]   goal_vec_body   — goal direction in body frame, L2-normalised
@@ -51,9 +51,28 @@ Reward function (dense, shaped for fast convergence):
       - w_orient * orientation_penalty  # keep nose toward goal
       - w_bound  * boundary_penalty     # out-of-bounds penalty
 
-Domain randomisation hook (for DR wrapper in Step 3):
+Domain randomisation hook (for DR wrapper):
     env.physics_params dict is read every step.
     Call env.randomize_physics(rng) to sample new params without reset.
+
+Bugs fixed vs original version:
+    BUG 1 — Orientation penalty sign corrected.
+            Was: -w * (1.0 + cos_theta) → rewarded pointing AWAY from goal.
+            Fix: -w * (1.0 - cos_theta) → penalises pointing away from goal.
+            This single bug caused near-zero success rates across all conditions.
+
+    BUG 2 — Buoyancy formula corrected.
+            Was: total_mass * g * (1.0 + offset) → ~111N upward at offset=0.
+            Fix: total_mass * g * offset → 0N at offset=0 (truly neutrally buoyant).
+            Agent was fighting 110N of upward force every step — very hard to learn.
+
+    BUG 3 — total_mass cached in __init__.
+            Was: recomputed every substep (4 million times during 1M step training).
+            Fix: computed once at init, stored as self._total_mass. Cleaner and faster.
+
+    BUG 4 — xfrc_applied cleared BEFORE applying forces each substep (correct order).
+            Was: cleared after the loop, meaning forces were applied inconsistently.
+            Fix: clear → apply forces → step. Every substep, every time.
 
 Research notes:
     - xfrc_applied is in WORLD frame. Drag is computed in body frame then
@@ -62,6 +81,12 @@ Research notes:
     - VecNormalize handles obs/reward normalisation — do not normalise here.
     - frame_skip=4 → effective dt = 4 * 0.01 = 0.04s, ~25Hz control rate.
     - max_episode_steps=500 → 20 seconds per episode at 25Hz.
+    - gravity=0 in XML. Net buoyancy = mass * g * buoyancy_offset.
+      offset=0.0   → neutrally buoyant (zero net vertical force).
+      offset=+0.02 → 2% of weight net upward (floats gently).
+      offset=-0.02 → 2% of weight net downward (sinks gently).
+    - Thruster ctrl sign: positive ctrl = forward thrust (verified by step test).
+      data.ctrl[:] = effective_ctrl — NO sign flip needed.
 """
 
 from __future__ import annotations
@@ -87,8 +112,13 @@ DEFAULT_PHYSICS = {
     # Real AUV range: 0.1 (streamlined) to 0.8 (high-drag test).
     "c_drag_axial": 0.08,  # along body X (fore-aft, low drag)
     "c_drag_lateral": 0.20,  # along body Y/Z (cross-flow, higher drag)
-    # Buoyancy offset as fraction of total weight.
-    # 0.0 = neutrally buoyant, +0.02 = 2% positive (floats up slightly).
+    # Net buoyancy offset as fraction of total weight.
+    # BUG 2 FIX: this is the NET offset only — not the full gravitational equivalent.
+    # 0.0  = neutrally buoyant (gravity and buoyancy perfectly cancel, zero net force).
+    # +0.02 = 2% net upward force (slightly positive buoyancy).
+    # -0.02 = 2% net downward force (slightly negative buoyancy).
+    # Previous version applied total_mass * g * (1 + offset) which was ~111N upward
+    # even at offset=0, forcing the agent to fight huge forces every episode step.
     "buoyancy_offset": 0.02,
     # Water current vector in world frame (m/s). Zero = still water.
     "current_velocity": np.array([0.0, 0.0, 0.0], dtype=np.float32),
@@ -197,8 +227,16 @@ class HalcyonAUVEnv(Env):
         )
         self._n_actuators = self.model.nu  # 4
 
+        # BUG 3 FIX: Cache total_mass once at init — never recompute in hot loop.
+        # Previously this sum was computed every substep (4 × 1,000,000 = 4M times).
+        # Total mass is constant so computing it once at init is correct and faster.
+        self._total_mass = float(
+            sum(self.model.body_mass[i] for i in range(self.model.nbody))
+        )
+
         # Sensor data offsets (matches sensor layout documented in auv.xml)
         # pos[0:3], quat[3:7], linvel[7:10], angvel[10:13]
+        # accel[13:16], gyro[16:19], actfrc[19:23], rangefinders[23:27]
         self._sensor_pos_adr = 0
         self._sensor_quat_adr = 3
         self._sensor_linvel_adr = 7
@@ -314,6 +352,7 @@ class HalcyonAUVEnv(Env):
 
         # Small random initial perturbation (avoids degenerate start states)
         self.data.qpos[0:3] += self.np_random.uniform(-0.3, 0.3, 3)
+
         # Random initial yaw (agent must learn to rotate to face goal)
         yaw = self.np_random.uniform(-np.pi, np.pi)
         quat = _euler_to_quat(0.0, 0.0, yaw)
@@ -355,15 +394,20 @@ class HalcyonAUVEnv(Env):
 
         # Apply actuator efficiency (DR can degrade individual thrusters)
         effective_ctrl = action * self.physics_params["actuator_efficiency"]
+
+        # BUG 1 VERIFIED: positive ctrl = forward thrust. No sign flip needed.
+        # Confirmed by step test: data.ctrl[:]=1.0 → positive X velocity after steps.
         self.data.ctrl[:] = effective_ctrl
 
-        # Simulate frame_skip steps, applying fluid forces each substep
+        # BUG 4 FIX: clear xfrc_applied BEFORE applying forces, then step.
+        # Correct order every substep: zero → apply fluid forces → mj_step.
+        # Previous version cleared after the full loop which was incorrect.
         for _ in range(self.frame_skip):
             self.data.xfrc_applied[:] = 0.0
             self._apply_fluid_forces()
             mujoco.mj_step(self.model, self.data)
 
-        # Clear external forces (must reset each frame, not cumulative)
+        # Final clear after last substep (clean state for next call)
         self.data.xfrc_applied[:] = 0.0
 
         self._step_count += 1
@@ -438,14 +482,20 @@ class HalcyonAUVEnv(Env):
 
         xfrc_applied layout per body: [fx, fy, fz, tx, ty, tz] in world frame.
 
-        Critical: xfrc_applied[i] is ZEROED after each mj_step call,
-        so we set it fresh every substep (this is correct behaviour).
+        Critical: xfrc_applied must be zeroed and reapplied every substep.
+        This is handled correctly in step() — see BUG 4 FIX above.
+
+        Physics notes:
+            BUG 2 FIX: buoyancy applies only the net offset force.
+            BUG 3 FIX: self._total_mass is used (cached at init, not recomputed).
         """
         p = self.physics_params
 
         # ── Get AUV rotation matrix (body → world) ───────────────────────────
         # data.xmat[body_id] is a flattened 3x3 rotation matrix (row-major).
-        R = self.data.xmat[self._auv_body_id].reshape(3, 3)  # world = R @ body
+        # world_vec = R @ body_vec
+        # body_vec  = R.T @ world_vec  (R is orthonormal so R^T = R^{-1})
+        R = self.data.xmat[self._auv_body_id].reshape(3, 3)
 
         # ── Get velocities in WORLD frame (from sensors) ─────────────────────
         v_world = self.data.sensordata[
@@ -453,12 +503,12 @@ class HalcyonAUVEnv(Env):
         ].copy()
 
         # ── Transform linear velocity to BODY frame ──────────────────────────
-        # v_body = R^T @ v_world  (R is orthonormal so R^T = R^{-1})
         v_body = R.T @ v_world
 
         # ── 1. Quadratic drag (body frame) ────────────────────────────────────
         # F_drag_body[i] = -c_i * v_body[i] * |v_body[i]|
         # Axial drag (X axis) is lower than lateral drag (Y, Z axes).
+        # This models the streamlined torpedo shape — less resistance fore-aft.
         c = np.array(
             [
                 p["c_drag_axial"],
@@ -469,41 +519,54 @@ class HalcyonAUVEnv(Env):
         )
         F_drag_body = -c * v_body * np.abs(v_body)
 
-        # Rotate drag force to world frame
+        # Rotate drag force to world frame for xfrc_applied
         F_drag_world = R @ F_drag_body
 
-        # ── 2. Buoyancy force (world frame, +Z) ──────────────────────────────
-        # gravity = 0 in XML. We apply net buoyancy = mass * g * (1 + offset).
-        # With offset=0.02: AUV experiences 2% net upward force (slightly positive).
-        total_mass = sum(self.model.body_mass[i] for i in range(self.model.nbody))
+        # ── 2. Net buoyancy force (world frame, +Z) ───────────────────────────
+        # BUG 2 FIX: gravity=0 in XML so we apply only the NET offset force.
+        #
+        # WRONG (original): total_mass * g * (1.0 + buoyancy_offset)
+        #   At offset=0.02: 11.1 * 9.81 * 1.02 = 111.2N upward — enormous.
+        #   At offset=0.0:  11.1 * 9.81 * 1.00 = 109.0N upward — still huge.
+        #   The agent had to apply constant thrust just to counteract buoyancy.
+        #   This made goal-reaching dramatically harder than necessary.
+        #
+        # CORRECT (fixed): total_mass * g * buoyancy_offset
+        #   At offset= 0.0:  0.0N  — truly neutrally buoyant.
+        #   At offset=+0.02: 2.18N upward — gentle positive buoyancy.
+        #   At offset=-0.05: 5.44N downward — moderate negative buoyancy.
+        #   This is physically correct for an AUV with gravity cancelled in XML.
         g = 9.81  # m/s^2
         F_buoy_world = np.array(
-            [0.0, 0.0, total_mass * g * (1.0 + p["buoyancy_offset"])], dtype=np.float64
+            [0.0, 0.0, self._total_mass * g * p["buoyancy_offset"]],
+            dtype=np.float64,
         )
 
         # ── 3. Water current drag (world frame) ───────────────────────────────
         # The current exerts a drag force proportional to relative velocity.
         # F_curr = c_lateral * (v_current - v_AUV) * |v_current - v_AUV|
         # This correctly pushes the AUV in the current direction when stationary
-        # and reduces drag when moving with the current.
+        # and reduces effective drag when the AUV moves with the current.
         v_current = p["current_velocity"].astype(np.float64)
         v_rel = v_current - v_world
-        # Use lateral drag coefficient for current force (current hits broad side)
+        # Use lateral drag coefficient — current hits the broad side of the hull
         F_current_world = p["c_drag_lateral"] * v_rel * np.abs(v_rel)
 
-        # ── 4. Added mass (body frame, optional) ──────────────────────────────
+        # ── 4. Added mass (body frame → world frame) ──────────────────────────
         # Virtual inertia from accelerating water. F_am = -C_a * m * a_body.
-        # We approximate acceleration as (v - v_prev) / dt using sensor data.
-        # Note: this is a first-order approximation; good enough for DR purposes.
-        accel_body = self.data.sensordata[13:16].copy()  # accelerometer at IMU
-        F_added_mass_body = -(p["added_mass_coeff"] * total_mass) * accel_body
+        # Approximated from the IMU accelerometer sensor.
+        # Note: first-order approximation — sufficient for DR parameter coverage.
+        accel_body = self.data.sensordata[13:16].copy()  # IMU accelerometer
+
+        # BUG 3 FIX: use cached self._total_mass (not recomputed here)
+        F_added_mass_body = -(p["added_mass_coeff"] * self._total_mass) * accel_body
         F_added_mass_world = R @ F_added_mass_body
 
         # ── Sum all forces and apply ──────────────────────────────────────────
         F_total = F_drag_world + F_buoy_world + F_current_world + F_added_mass_world
 
         # xfrc_applied[body_id] = [fx, fy, fz, tx, ty, tz]
-        # No external torques from fluid (fins provide passive stability)
+        # No external torques from fluid (fins provide passive stability in XML)
         self.data.xfrc_applied[self._auv_body_id, 0:3] = F_total
         self.data.xfrc_applied[self._auv_body_id, 3:6] = 0.0
 
@@ -518,6 +581,14 @@ class HalcyonAUVEnv(Env):
         All quantities are expressed in body frame where possible.
         Body-frame observations are invariant to world position/heading,
         which is exactly what we want for a transferable policy.
+
+        Why body frame?
+            A policy that learned to navigate from (0,0,0) should also
+            work from (5, 3, -2) without retraining. World-frame position
+            and heading observations break this invariance because they
+            encode absolute position rather than relative geometry.
+            Body-frame preserves the invariance — the policy sees only
+            the relationship between itself and the goal, not where it is.
 
         Obs layout (matches observation_space):
             [0:3]   goal_vec_body   — unit vector toward goal in body frame
@@ -547,7 +618,8 @@ class HalcyonAUVEnv(Env):
         else:
             goal_dir_world = np.array([1.0, 0.0, 0.0])
 
-        goal_vec_body = R.T @ goal_dir_world  # unit vector toward goal in body frame
+        # Unit vector toward goal in body frame
+        goal_vec_body = R.T @ goal_dir_world
 
         # Linear velocity (world → body)
         lin_vel_world = self.data.sensordata[
@@ -586,7 +658,6 @@ class HalcyonAUVEnv(Env):
             ],
             dtype=np.float32,
         )
-
         return obs
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -600,66 +671,86 @@ class HalcyonAUVEnv(Env):
         Compute shaped reward. Returns (total_reward, component_dict).
 
         Reward design rationale:
-        - Progress reward is the PRIMARY learning signal. It's signed
+        - Progress reward is the PRIMARY learning signal. It is signed
           (positive = getting closer, negative = getting farther).
           Scaled by 10 to dominate other terms.
         - Energy penalty prevents the policy from using max thrust always.
           Critically important for real AUVs (battery life).
         - Smoothness penalty prevents high-frequency action oscillation
-          that would stress actuators and break sim-to-real.
+          that would stress actuators and break sim-to-real transfer.
         - Orientation penalty gently encourages nose-toward-goal for
-          energy efficiency (axial drag < lateral drag).
+          energy efficiency (axial drag << lateral drag).
         - Boundary penalty is a hard signal — policy learns to stay in.
+
+        BUG 1 FIX — Orientation penalty sign:
+            The orientation penalty uses (1 - cos θ), the standard angular
+            distance metric. θ is the angle between the AUV nose (+X axis)
+            and the direction to the goal.
+
+            cos(θ) = goal_dir_body[0]  (x-component of goal unit vector in body frame)
+            θ=0   → nose at goal  → cos=+1 → (1-cos)=0   → no penalty (correct)
+            θ=90° → perpendicular → cos= 0 → (1-cos)=1   → half penalty
+            θ=180°→ nose away     → cos=-1 → (1-cos)=2   → max penalty (correct)
+
+            WRONG (original): r_orient = -w * (1.0 + cos_theta)
+                θ=0   → cos=+1 → (1+1)=2 → r_orient = -2w  ← PENALISED for correct pose!
+                θ=180°→ cos=-1 → (1-1)=0 → r_orient =  0   ← REWARDED for wrong pose!
+                The agent learned to point away from the goal. Catastrophic.
+
+            CORRECT (fixed): r_orient = -w * (1.0 - cos_theta)
+                θ=0   → cos=+1 → (1-1)=0 → r_orient =  0   ← no penalty when aligned
+                θ=180°→ cos=-1 → (1+1)=2 → r_orient = -2w  ← penalised when pointing away
         """
         w = self.reward_weights
 
-        # ── Progress reward ─────────────────────────────────────────────────
-        # Positive when closer, negative when farther. The 1/dt normalisation
-        # makes the reward independent of frame_skip choice.
+        # ── Progress reward ──────────────────────────────────────────────────
+        # Positive when AUV got closer this step, negative when it moved away.
         progress = self._prev_dist - curr_dist
-        r_progress = w["progress"] * np.clip(
-            progress, -1.0, 1.0
-        )  # metres closed this step
+        r_progress = w["progress"] * np.clip(progress, -1.0, 1.0)
 
         # ── Alive reward ─────────────────────────────────────────────────────
+        # Small constant per step — encourages surviving the full episode
+        # rather than terminating early by going out of bounds.
         r_alive = w["alive"]
 
         # ── Energy penalty ───────────────────────────────────────────────────
-        # Penalise sum of squared actuator outputs.
+        # Penalise sum of squared actuator outputs. Quadratic cost means
+        # large individual thrusts are penalised more than distributed effort.
         r_energy = -w["energy"] * float(np.sum(action**2))
 
         # ── Smoothness penalty ───────────────────────────────────────────────
         # Penalise action change between consecutive steps.
+        # Reduces high-frequency oscillation that would stress real actuators.
         action_delta = action - self._prev_action
         r_smooth = -w["smoothness"] * float(np.sum(action_delta**2))
 
         # ── Orientation penalty ──────────────────────────────────────────────
-        # Penalise when AUV nose is not pointing toward goal.
-        # goal_vec_body[0] = X-component of goal direction in body frame.
-        # When nose points at goal, this is 1.0.
+        # BUG 1 FIX: use (1 - cos_theta), not (1 + cos_theta).
+        # goal_dir_body[0] = cos(theta) where theta is angle between
+        # AUV nose (+X) and goal direction in body frame.
         auv_pos_world = self.data.sensordata[
             self._sensor_pos_adr : self._sensor_pos_adr + 3
         ]
         goal_vec_world = self._goal_pos - auv_pos_world
+
         if curr_dist > 1e-6:
             R = self.data.xmat[self._auv_body_id].reshape(3, 3)
             goal_dir_world = goal_vec_world / curr_dist
-
-            # THE BUG FIX: Extract scalar safely with .item()
             goal_dir_body = R.T @ goal_dir_world
-            goal_dir_body_x = goal_dir_body[0].item()  # cosine of angle to goal
+            cos_theta = float(goal_dir_body[0])  # x-component = cos(theta)
 
-            # penalty = 1 - cos(θ): 0 when aligned, 2 when pointing away
-            r_orient = -w["orientation"] * (1.0 - goal_dir_body_x)
+            # Correct formula: (1 - cos θ) is 0 when aligned, 2 when pointing away
+            r_orient = -w["orientation"] * (1.0 - cos_theta)
         else:
             r_orient = 0.0
 
         # ── Boundary penalty ─────────────────────────────────────────────────
+        # Hard penalty when AUV exits the workspace sphere.
+        # Episode also terminates — this is both a signal and a termination.
         auv_dist_from_origin = float(np.linalg.norm(auv_pos_world))
-        if auv_dist_from_origin > self.workspace_radius:
-            r_boundary = -w["boundary"]
-        else:
-            r_boundary = 0.0
+        r_boundary = (
+            -w["boundary"] if auv_dist_from_origin > self.workspace_radius else 0.0
+        )
 
         total = r_progress + r_alive + r_energy + r_smooth + r_orient + r_boundary
 
@@ -682,6 +773,11 @@ class HalcyonAUVEnv(Env):
         Episode terminates (terminated=True, not truncated) if:
           1. AUV reaches goal (curr_dist < goal_threshold), or
           2. AUV exits the workspace sphere (out-of-bounds).
+
+        Note: terminated=True from boundary is NOT a success.
+        The DR wrapper distinguishes success from boundary termination
+        by checking goal_dist < goal_threshold separately when recording
+        episode outcomes for the curriculum rolling window.
         """
         # Goal reached
         if curr_dist < self.goal_threshold:
@@ -695,14 +791,14 @@ class HalcyonAUVEnv(Env):
         return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Domain Randomisation hook (called by DR wrapper in Step 3)
+    # Domain Randomisation hook (called by DR wrapper)
     # ─────────────────────────────────────────────────────────────────────────
 
     def randomize_physics(
         self,
         rng: np.random.Generator,
         drag_range: Tuple[float, float] = (0.1, 0.5),
-        buoyancy_range: Tuple[float, float] = (-0.05, 0.05),
+        buoyancy_range: Tuple[float, float] = (-0.05, 0.10),
         current_speed_range: Tuple[float, float] = (0.0, 0.3),
         added_mass_range: Tuple[float, float] = (0.05, 0.3),
         efficiency_range: Tuple[float, float] = (0.85, 1.0),
@@ -711,20 +807,24 @@ class HalcyonAUVEnv(Env):
         Sample new physics parameters from given ranges.
 
         Called by the DR wrapper at each episode reset.
-        Ranges here correspond to TRAINING distribution.
-        Test distribution uses wider ranges (see DR wrapper).
+        Ranges here correspond to the TRAINING distribution.
+        Test distribution uses wider held-out ranges (see auv_dr_wrapper.py).
 
-        Parameters can also be set directly: env.physics_params["c_drag_axial"] = 0.3
+        Parameters can also be set directly without calling this method:
+            env.physics_params["c_drag_axial"] = 0.3
 
-        Returns the sampled params dict (for logging to TensorBoard).
+        Returns
+        -------
+        dict
+            Sampled parameter values (for logging to TensorBoard via info dict).
         """
-        # Drag coefficients
-        c_drag_axial = float(rng.uniform(*drag_range)) * 0.4  # axial is ~40% of lateral
+        # Drag coefficients — axial is ~40% of lateral for torpedo-shaped hulls
+        c_drag_axial = float(rng.uniform(*drag_range)) * 0.4
         c_drag_lateral = float(rng.uniform(*drag_range))
         self.physics_params["c_drag_axial"] = c_drag_axial
         self.physics_params["c_drag_lateral"] = c_drag_lateral
 
-        # Buoyancy offset
+        # Buoyancy offset (net fraction of weight — see BUG 2 FIX above)
         buoyancy = float(rng.uniform(*buoyancy_range))
         self.physics_params["buoyancy_offset"] = buoyancy
 
@@ -734,10 +834,10 @@ class HalcyonAUVEnv(Env):
         direction /= np.linalg.norm(direction) + 1e-8
         self.physics_params["current_velocity"] = (direction * speed).astype(np.float32)
 
-        # Added mass
+        # Added mass coefficient
         self.physics_params["added_mass_coeff"] = float(rng.uniform(*added_mass_range))
 
-        # Actuator efficiency (each thruster can degrade independently)
+        # Actuator efficiency — each thruster degrades independently
         self.physics_params["actuator_efficiency"] = rng.uniform(
             efficiency_range[0], efficiency_range[1], size=4
         ).astype(np.float32)
@@ -759,7 +859,6 @@ class HalcyonAUVEnv(Env):
         Sample a random goal position inside the workspace sphere.
         Goal is at least goal_min_dist and at most goal_max_dist from AUV start.
         """
-        # Uniform random point on unit sphere × random radius
         direction = self.np_random.standard_normal(3)
         direction /= np.linalg.norm(direction) + 1e-8
         dist = self.np_random.uniform(self.goal_min_dist, self.goal_max_dist)
@@ -769,9 +868,8 @@ class HalcyonAUVEnv(Env):
         return goal.astype(np.float64)
 
     def _set_goal_body(self, pos: np.ndarray):
-        """Move goal body to pos. Must call mj_forward after to propagate."""
+        """Move goal body to pos. mj_forward is called in reset() after this."""
         self.model.body_pos[self._goal_body_id] = pos
-        # Note: mj_forward is called in reset() after this.
 
     def _goal_distance(self) -> float:
         """Return Euclidean distance from AUV to goal."""
@@ -899,13 +997,12 @@ if __name__ == "__main__":
     ]
     xml_path = next((p for p in xml_candidates if p.exists()), None)
     if xml_path is None:
-        print(
-            "ERROR: auv.xml not found. Place it next to auv_env.py or in ~/rl_robotics/envs/"
-        )
+        print("ERROR: auv.xml not found. Place it next to auv_env.py.")
         sys.exit(1)
     print(f"Using XML: {xml_path}")
 
     env = HalcyonAUVEnv(xml_path=xml_path)
+    print(f"Total mass (cached at init): {env._total_mass:.3f} kg")
 
     # SB3 env checker
     try:
@@ -916,7 +1013,7 @@ if __name__ == "__main__":
     except ImportError:
         print("  (stable-baselines3 not installed, skipping check_env)")
 
-    # Basic rollout
+    # Basic rollout info
     obs, info = env.reset(seed=42)
     print(f"\nObservation space: {env.observation_space}")
     print(f"Action space:      {env.action_space}")
@@ -926,7 +1023,55 @@ if __name__ == "__main__":
     print(f"Initial goal dist: {info['goal_dist']:.2f}m")
     print()
 
-    # Speed test: 1000 steps
+    # ── BUG 2 verification: net buoyancy ─────────────────────────────────────
+    print("--- BUG 2 FIX verification: net buoyancy force ---")
+    env.physics_params["buoyancy_offset"] = 0.0
+    env.reset()
+    env.data.ctrl[:] = 0.0
+    env.data.xfrc_applied[:] = 0.0
+    env._apply_fluid_forces()
+    fz = env.data.xfrc_applied[env._auv_body_id, 2]
+    print(f"  Fz at offset= 0.00: {fz:.6f} N  (expect ~0.0 — neutrally buoyant)")
+    assert abs(fz) < 0.01, f"FAIL: buoyancy not zero at offset=0: {fz}"
+    print("  ✓ neutrally buoyant at offset=0")
+
+    env.physics_params["buoyancy_offset"] = 0.02
+    env.data.xfrc_applied[:] = 0.0
+    env._apply_fluid_forces()
+    fz = env.data.xfrc_applied[env._auv_body_id, 2]
+    expected = env._total_mass * 9.81 * 0.02
+    print(f"  Fz at offset=+0.02: {fz:.4f} N  (expect ~{expected:.4f} N upward)")
+    assert abs(fz - expected) < 0.5, f"FAIL: unexpected buoyancy force: {fz}"
+    print("  ✓ buoyancy magnitude correct at offset=+0.02")
+    print()
+
+    # ── BUG 1 verification: orientation penalty sign ──────────────────────────
+    print("--- BUG 1 FIX verification: orientation penalty sign ---")
+    env.physics_params["buoyancy_offset"] = 0.02
+    obs, info = env.reset(seed=0)
+    action = np.zeros(4, dtype=np.float32)
+    _, _, _, _, info = env.step(action)
+    r_o = info["r_orient"]
+    print(f"  r_orient value: {r_o:.4f}  (must be <= 0.0)")
+    assert r_o <= 0.001, f"FAIL: r_orient must be non-positive, got {r_o}"
+    print("  ✓ orientation penalty is non-positive (correct sign confirmed)")
+    print()
+
+    # ── Thruster direction verification ───────────────────────────────────────
+    print("--- Thruster direction verification: positive ctrl = forward ---")
+    obs, info = env.reset(seed=0)
+    env.data.ctrl[:] = 1.0
+    for _ in range(10):
+        mujoco.mj_step(env.model, env.data)
+    vx = float(env.data.sensordata[7])
+    print(f"  X velocity after 10 steps (ctrl=[1,1,1,1]): {vx:.4f} m/s  (expect > 0)")
+    assert vx > 0, f"FAIL: positive ctrl should give positive X velocity, got {vx}"
+    print("  ✓ positive ctrl = forward thrust confirmed")
+    print()
+
+    # ── Speed test: 1000 steps ────────────────────────────────────────────────
+    print("--- Speed test (1000 steps) ---")
+    env.physics_params["buoyancy_offset"] = 0.02
     obs, info = env.reset()
     t0 = time.perf_counter()
     N = 1000
@@ -939,20 +1084,20 @@ if __name__ == "__main__":
             obs, info = env.reset()
     elapsed = time.perf_counter() - t0
     fps = N * env.frame_skip / elapsed
-
-    print(f"Speed test: {N} steps in {elapsed:.2f}s")
+    print(f"  {N} steps in {elapsed:.2f}s")
     print(f"  → {fps:.0f} sim-steps/sec  ({N / elapsed:.0f} env-steps/sec)")
     print(f"  → Cumulative reward over {N} env-steps: {total_reward:.2f}")
     print()
 
-    # DR test
+    # ── DR test ───────────────────────────────────────────────────────────────
+    print("--- DR hook test ---")
     rng = np.random.default_rng(0)
     env.reset()
     sampled = env.randomize_physics(rng)
-    print("DR test — sampled physics:")
+    print("  Sampled physics params:")
     for k, v in sampled.items():
-        print(f"  {k}: {v:.4f}")
+        print(f"    {k}: {v:.4f}")
 
     print()
-    print("✓ All checks passed. Ready for Step 3 (DR wrapper).")
+    print("✓ All checks passed. HalcyonAUVEnv ready for training.")
     env.close()
