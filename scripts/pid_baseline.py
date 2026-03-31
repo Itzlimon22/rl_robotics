@@ -48,13 +48,13 @@ import numpy as np
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 _SCRIPT_DIR = Path(__file__).parent.resolve()
-_REPO_ROOT  = _SCRIPT_DIR.parent
-_ENVS_DIR   = _REPO_ROOT / "envs"
+_REPO_ROOT = _SCRIPT_DIR.parent
+_ENVS_DIR = _REPO_ROOT / "envs"
 for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from auv_env        import HalcyonAUVEnv
+from auv_env import HalcyonAUVEnv
 from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
 
 
@@ -70,19 +70,15 @@ from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
 DEFAULT_GAINS = {
     # Proportional gain: how hard to push toward goal
     # Higher = faster response but more oscillation
-    "Kp": np.array([0.8, 0.8, 0.8]),   # [x, y, z]
-
+    "Kp": np.array([0.8, 0.8, 0.8]),  # [x, y, z]
     # Integral gain: corrects for persistent errors (e.g. water current)
     # Too high = windup and oscillation
     "Ki": np.array([0.05, 0.05, 0.05]),
-
     # Derivative gain: damps oscillation, anticipates overshoot
     # Too high = noise amplification
     "Kd": np.array([0.4, 0.4, 0.4]),
-
     # Max force per axis (N) — matches 2-thruster differential max
     "F_max": 20.0,
-
     # Integral windup limit — prevents integral from growing unbounded
     "windup_limit": 5.0,
 }
@@ -91,6 +87,7 @@ DEFAULT_GAINS = {
 # ─────────────────────────────────────────────────────────────────────────────
 # PID Controller
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class PIDController:
     """
@@ -103,31 +100,31 @@ class PIDController:
     def __init__(
         self,
         gains: Optional[Dict] = None,
-        dt: float = 0.04,   # 25 Hz (frame_skip=4 × timestep=0.01)
+        dt: float = 0.04,  # 25 Hz (frame_skip=4 × timestep=0.01)
     ):
         g = gains or DEFAULT_GAINS
-        self.Kp           = np.array(g["Kp"],    dtype=np.float64)
-        self.Ki           = np.array(g["Ki"],    dtype=np.float64)
-        self.Kd           = np.array(g["Kd"],    dtype=np.float64)
-        self.F_max        = float(g["F_max"])
+        self.Kp = np.array(g["Kp"], dtype=np.float64)
+        self.Ki = np.array(g["Ki"], dtype=np.float64)
+        self.Kd = np.array(g["Kd"], dtype=np.float64)
+        self.F_max = float(g["F_max"])
         self.windup_limit = float(g["windup_limit"])
-        self.dt           = dt
+        self.dt = dt
 
         # State
-        self._integral   = np.zeros(3, dtype=np.float64)
+        self._integral = np.zeros(3, dtype=np.float64)
         self._prev_error = np.zeros(3, dtype=np.float64)
         self._first_step = True
 
     def reset(self):
         """Reset integrator and derivative state. Call at episode start."""
-        self._integral   = np.zeros(3, dtype=np.float64)
+        self._integral = np.zeros(3, dtype=np.float64)
         self._prev_error = np.zeros(3, dtype=np.float64)
         self._first_step = True
 
     def compute(
         self,
-        auv_pos_world: np.ndarray,    # [x, y, z] AUV position in world frame
-        goal_pos_world: np.ndarray,   # [x, y, z] goal position in world frame
+        auv_pos_world: np.ndarray,  # [x, y, z] AUV position in world frame
+        goal_pos_world: np.ndarray,  # [x, y, z] goal position in world frame
         rotation_matrix: np.ndarray,  # 3×3 body→world rotation matrix (data.xmat)
     ) -> np.ndarray:
         """
@@ -146,17 +143,15 @@ class PIDController:
                [thrust_top, thrust_bot, thrust_left, thrust_right]
         """
         # ── Position error in world frame ─────────────────────────────────────
-        error_world = goal_pos_world - auv_pos_world   # (3,)
+        error_world = goal_pos_world - auv_pos_world  # (3,)
 
         # ── Integral term with anti-windup ────────────────────────────────────
         self._integral += error_world * self.dt
-        self._integral  = np.clip(
-            self._integral, -self.windup_limit, self.windup_limit
-        )
+        self._integral = np.clip(self._integral, -self.windup_limit, self.windup_limit)
 
         # ── Derivative term ───────────────────────────────────────────────────
         if self._first_step:
-            derivative       = np.zeros(3)
+            derivative = np.zeros(3)
             self._first_step = False
         else:
             derivative = (error_world - self._prev_error) / self.dt
@@ -165,9 +160,7 @@ class PIDController:
 
         # ── PID output: desired force in world frame ──────────────────────────
         F_world = (
-            self.Kp * error_world
-          + self.Ki * self._integral
-          + self.Kd * derivative
+            self.Kp * error_world + self.Ki * self._integral + self.Kd * derivative
         )
 
         # Clip to max force per axis
@@ -175,8 +168,8 @@ class PIDController:
 
         # ── Transform world force → body frame ───────────────────────────────
         # R maps body → world, so R^T maps world → body
-        R         = rotation_matrix                   # body → world
-        F_body    = R.T @ F_world                     # world → body  (3,)
+        R = rotation_matrix  # body → world
+        F_body = R.T @ F_world  # world → body  (3,)
 
         # ── Thrust allocation: body force → 4 thruster commands ──────────────
         ctrl = self._allocate_thrust(F_body)
@@ -200,7 +193,7 @@ class PIDController:
         Each command normalised by max thrust (20N × gear).
         """
         Fx, Fy, Fz = F_body
-        T_max = self.F_max   # 20N per thruster
+        T_max = self.F_max  # 20N per thruster
 
         # Surge contribution (all thrusters)
         surge = Fx / (4 * T_max)
@@ -209,15 +202,17 @@ class PIDController:
         heave = Fz / (2 * T_max)
 
         # Sway contribution (left-right differential)
-        sway  = Fy / (2 * T_max)
+        sway = Fy / (2 * T_max)
 
         # Combine per thruster: [top, bot, left, right]
-        ctrl = np.array([
-            surge + heave,    # thrust_top:   surge + heave
-            surge - heave,    # thrust_bot:   surge - heave
-            surge + sway,     # thrust_left:  surge + sway
-            surge - sway,     # thrust_right: surge - sway
-        ])
+        ctrl = np.array(
+            [
+                surge + heave,  # thrust_top:   surge + heave
+                surge - heave,  # thrust_bot:   surge - heave
+                surge + sway,  # thrust_left:  surge + sway
+                surge - sway,  # thrust_right: surge - sway
+            ]
+        )
 
         # Clip to [-1, 1]
         return np.clip(ctrl, -1.0, 1.0)
@@ -226,6 +221,7 @@ class PIDController:
 # ─────────────────────────────────────────────────────────────────────────────
 # Evaluation runner
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def run_pid_eval(
     xml_path: str,
@@ -253,7 +249,8 @@ def run_pid_eval(
     results dict with success_rate, mean_reward, mean_dist, etc.
     """
     # Build env
-    base_env = HalcyonAUVEnv(xml_path=xml_path)
+    # PID needs more steps than SAC — give it 1000 steps (40 seconds)
+    base_env = HalcyonAUVEnv(xml_path=xml_path, max_episode_steps=1000)
 
     if use_test_dist:
         # Apply test distribution ranges directly
@@ -264,9 +261,11 @@ def run_pid_eval(
         wrapper._test_mode = True
         if verbose:
             dist_name = "TEST (held-out)"
-            print(f"[pid] Test ranges: "
-                  f"drag_lateral={TEST_PARAM_CONFIG['c_drag_lateral']}, "
-                  f"current={TEST_PARAM_CONFIG['current_speed']}")
+            print(
+                f"[pid] Test ranges: "
+                f"drag_lateral={TEST_PARAM_CONFIG['c_drag_lateral']}, "
+                f"current={TEST_PARAM_CONFIG['current_speed']}"
+            )
     else:
         wrapper = AUVDomainRandomWrapper(
             base_env, mode="uniform", seed=seed, verbose=False
@@ -280,9 +279,9 @@ def run_pid_eval(
         print(f"[pid] Evaluating {n_episodes} episodes on {dist_name} distribution...")
 
     # Metrics
-    successes    = []
-    rewards      = []
-    final_dists  = []
+    successes = []
+    rewards = []
+    final_dists = []
     episode_lens = []
 
     for ep in range(n_episodes):
@@ -290,19 +289,19 @@ def run_pid_eval(
         pid.reset()
 
         ep_reward = 0.0
-        ep_steps  = 0
+        ep_steps = 0
 
         # Get initial goal position from info
         goal_pos = np.array(info["goal_pos"])
 
         while True:
             # Get AUV state from MuJoCo data directly
-            mj_data  = env.env.data
+            mj_data = env.env.data
             mj_model = env.env.model
-            body_id  = env.env._auv_body_id
+            body_id = env.env._auv_body_id
 
             auv_pos = mj_data.sensordata[0:3].copy()
-            R       = mj_data.xmat[body_id].reshape(3, 3)
+            R = mj_data.xmat[body_id].reshape(3, 3)
             goal_pos = np.array(info.get("goal_pos", goal_pos))
 
             # PID control
@@ -310,14 +309,14 @@ def run_pid_eval(
 
             obs, reward, terminated, truncated, info = env.step(ctrl)
             ep_reward += reward
-            ep_steps  += 1
+            ep_steps += 1
 
             if terminated or truncated:
                 break
 
         # Episode metrics
         final_dist = info.get("goal_dist", float("inf"))
-        success    = terminated and final_dist < env.env.goal_threshold
+        success = terminated and final_dist < env.env.goal_threshold
 
         successes.append(float(success))
         rewards.append(ep_reward)
@@ -326,36 +325,44 @@ def run_pid_eval(
 
         if verbose and (ep + 1) % 10 == 0:
             sr = np.mean(successes) * 100
-            print(f"  {ep+1}/{n_episodes} episodes | success so far: {sr:.0f}%")
+            print(f"  {ep + 1}/{n_episodes} episodes | success so far: {sr:.0f}%")
 
     env.close()
 
     results = {
-        "controller":       "PID",
-        "distribution":     "test" if use_test_dist else "train",
-        "n_episodes":       n_episodes,
-        "success_rate":     float(np.mean(successes)),
-        "mean_reward":      float(np.mean(rewards)),
-        "std_reward":       float(np.std(rewards)),
-        "mean_dist":        float(np.mean(final_dists)),
-        "std_dist":         float(np.std(final_dists)),
-        "mean_ep_len":      float(np.mean(episode_lens)),
-        "gains":            {k: v.tolist() if isinstance(v, np.ndarray) else v
-                             for k, v in (gains or DEFAULT_GAINS).items()},
+        "controller": "PID",
+        "distribution": "test" if use_test_dist else "train",
+        "n_episodes": n_episodes,
+        "success_rate": float(np.mean(successes)),
+        "mean_reward": float(np.mean(rewards)),
+        "std_reward": float(np.std(rewards)),
+        "mean_dist": float(np.mean(final_dists)),
+        "std_dist": float(np.std(final_dists)),
+        "mean_ep_len": float(np.mean(episode_lens)),
+        "gains": {
+            k: v.tolist() if isinstance(v, np.ndarray) else v
+            for k, v in (gains or DEFAULT_GAINS).items()
+        },
     }
 
     if verbose:
-        print(f"\n{'='*55}")
+        print(f"\n{'=' * 55}")
         print(f"  PID EVAL — {dist_name} distribution")
         print(f"  Episodes:     {n_episodes}")
-        print(f"  Success rate: {results['success_rate']:.1%}  "
-              f"({int(np.sum(successes))}/{n_episodes})")
-        print(f"  Mean reward:  {results['mean_reward']:.2f} "
-              f"+/- {results['std_reward']:.2f}")
-        print(f"  Mean dist:    {results['mean_dist']:.2f}m "
-              f"+/- {results['std_dist']:.2f}m")
+        print(
+            f"  Success rate: {results['success_rate']:.1%}  "
+            f"({int(np.sum(successes))}/{n_episodes})"
+        )
+        print(
+            f"  Mean reward:  {results['mean_reward']:.2f} "
+            f"+/- {results['std_reward']:.2f}"
+        )
+        print(
+            f"  Mean dist:    {results['mean_dist']:.2f}m "
+            f"+/- {results['std_dist']:.2f}m"
+        )
         print(f"  Mean ep len:  {results['mean_ep_len']:.0f} steps")
-        print(f"{'='*55}")
+        print(f"{'=' * 55}")
 
     return results
 
@@ -363,6 +370,7 @@ def run_pid_eval(
 # ─────────────────────────────────────────────────────────────────────────────
 # Gain tuning helper
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def tune_gains(xml_path: str, n_episodes: int = 20):
     """
@@ -374,28 +382,32 @@ def tune_gains(xml_path: str, n_episodes: int = 20):
     print("=== PID Gain Tuning ===")
     print("Testing Kp values with Ki=0.05, Kd=0.4 on TRAINING distribution\n")
 
-    best_rate  = 0.0
+    best_rate = 0.0
     best_gains = None
 
-    for kp in [0.3, 0.5, 0.8, 1.0, 1.5, 2.0]:
+    for kp in [2.0, 3.0, 4.0, 5.0, 6.0, 8.0]:
         gains = dict(DEFAULT_GAINS)
         gains["Kp"] = np.array([kp, kp, kp])
+        gains["Kd"] = np.array([kp * 0.4, kp * 0.4, kp * 0.4])
 
         results = run_pid_eval(
-            xml_path, n_episodes=n_episodes,
-            use_test_dist=False, gains=gains,
-            seed=0, verbose=False,
+            xml_path,
+            n_episodes=n_episodes,
+            use_test_dist=False,
+            gains=gains,
+            seed=0,
+            verbose=False,
         )
         sr = results["success_rate"]
-        print(f"  Kp={kp:.1f} | success={sr:.1%} | "
-              f"mean_dist={results['mean_dist']:.2f}m")
+        print(
+            f"  Kp={kp:.1f} | success={sr:.1%} | mean_dist={results['mean_dist']:.2f}m"
+        )
 
         if sr > best_rate:
-            best_rate  = sr
+            best_rate = sr
             best_gains = gains
 
-    print(f"\nBest Kp: {best_gains['Kp'][0]:.1f} "
-          f"(success rate: {best_rate:.1%})")
+    print(f"\nBest Kp: {best_gains['Kp'][0]:.1f} (success rate: {best_rate:.1%})")
     print("Update DEFAULT_GAINS['Kp'] with this value.")
     return best_gains
 
@@ -404,28 +416,41 @@ def tune_gains(xml_path: str, n_episodes: int = 20):
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def build_parser():
     p = argparse.ArgumentParser(
         description="Evaluate PID baseline on Halcyon AUV.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--episodes",   type=int,   default=50,
-                   help="Number of evaluation episodes.")
-    p.add_argument("--test-dist",  action="store_true",
-                   help="Use held-out test distribution (paper eval). "
-                        "Default: training distribution.")
-    p.add_argument("--tune",       action="store_true",
-                   help="Run gain tuning sweep instead of evaluation.")
-    p.add_argument("--seed",       type=int,   default=42)
-    p.add_argument("--xml",        type=str,   default=None,
-                   help="Path to auv.xml. Auto-detected if not set.")
-    p.add_argument("--save",       type=str,   default=None,
-                   help="Path to save results JSON. Optional.")
+    p.add_argument(
+        "--episodes", type=int, default=50, help="Number of evaluation episodes."
+    )
+    p.add_argument(
+        "--test-dist",
+        action="store_true",
+        help="Use held-out test distribution (paper eval). "
+        "Default: training distribution.",
+    )
+    p.add_argument(
+        "--tune",
+        action="store_true",
+        help="Run gain tuning sweep instead of evaluation.",
+    )
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--xml",
+        type=str,
+        default=None,
+        help="Path to auv.xml. Auto-detected if not set.",
+    )
+    p.add_argument(
+        "--save", type=str, default=None, help="Path to save results JSON. Optional."
+    )
     return p
 
 
 def main():
-    args    = build_parser().parse_args()
+    args = build_parser().parse_args()
     xml_candidates = [
         _ENVS_DIR / "auv.xml",
         _REPO_ROOT / "auv.xml",
@@ -436,20 +461,18 @@ def main():
     else:
         xml_path = next((str(p) for p in xml_candidates if p.exists()), None)
         if xml_path is None:
-            raise FileNotFoundError(
-                "auv.xml not found. Pass --xml path/to/auv.xml"
-            )
+            raise FileNotFoundError("auv.xml not found. Pass --xml path/to/auv.xml")
 
     if args.tune:
         tune_gains(xml_path)
         return
 
     results = run_pid_eval(
-        xml_path        = xml_path,
-        n_episodes      = args.episodes,
-        use_test_dist   = args.test_dist,
-        seed            = args.seed,
-        verbose         = True,
+        xml_path=xml_path,
+        n_episodes=args.episodes,
+        use_test_dist=args.test_dist,
+        seed=args.seed,
+        verbose=True,
     )
 
     if args.save:
