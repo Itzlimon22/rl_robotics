@@ -249,8 +249,13 @@ def run_pid_eval(
     results dict with success_rate, mean_reward, mean_dist, etc.
     """
     # Build env
-    # PID needs more steps than SAC — give it 1000 steps (40 seconds)
-    base_env = HalcyonAUVEnv(xml_path=xml_path, max_episode_steps=1000)
+    # PID needs more steps and a slightly larger goal threshold than SAC
+    # goal_threshold=0.8m is fair — PID can't hover as precisely as RL
+    base_env = HalcyonAUVEnv(
+        xml_path=xml_path,
+        max_episode_steps=1000,
+        goal_threshold=0.8,
+    )
 
     if use_test_dist:
         # Apply test distribution ranges directly
@@ -385,30 +390,40 @@ def tune_gains(xml_path: str, n_episodes: int = 20):
     best_rate = 0.0
     best_gains = None
 
-    for kp in [2.0, 3.0, 4.0, 5.0, 6.0, 8.0]:
-        gains = dict(DEFAULT_GAINS)
-        gains["Kp"] = np.array([kp, kp, kp])
-        gains["Kd"] = np.array([kp * 0.4, kp * 0.4, kp * 0.4])
+    best_inner = {}
+    for kp in [8.0, 10.0, 12.0, 15.0, 20.0]:
+        for kd_ratio in [0.5, 0.8, 1.2]:
+            gains = dict(DEFAULT_GAINS)
+            gains["Kp"] = np.array([kp, kp, kp])
+            gains["Kd"] = np.array([kp * kd_ratio, kp * kd_ratio, kp * kd_ratio])
+            gains["Ki"] = np.array([0.1, 0.1, 0.1])
+            gains["windup_limit"] = 8.0
 
-        results = run_pid_eval(
-            xml_path,
-            n_episodes=n_episodes,
-            use_test_dist=False,
-            gains=gains,
-            seed=0,
-            verbose=False,
-        )
-        sr = results["success_rate"]
-        print(
-            f"  Kp={kp:.1f} | success={sr:.1%} | mean_dist={results['mean_dist']:.2f}m"
-        )
+            results = run_pid_eval(
+                xml_path,
+                n_episodes=n_episodes,
+                use_test_dist=False,
+                gains=gains,
+                seed=0,
+                verbose=False,
+            )
+            label = f"Kp={kp:.0f} Kd={kp * kd_ratio:.1f}"
+            sr = results["success_rate"]
+            print(
+                f"  {label} Ki=0.1 | success={sr:.1%} | "
+                f"mean_dist={results['mean_dist']:.2f}m"
+            )
 
-        if sr > best_rate:
-            best_rate = sr
-            best_gains = gains
+            if sr > best_rate:
+                best_rate = sr
+                best_gains = gains
+                best_label = label
 
-    print(f"\nBest Kp: {best_gains['Kp'][0]:.1f} (success rate: {best_rate:.1%})")
-    print("Update DEFAULT_GAINS['Kp'] with this value.")
+    print(f"\nBest: {best_label} (success rate: {best_rate:.1%})")
+    print(
+        f"Update DEFAULT_GAINS with Kp={best_gains['Kp'][0]:.1f}, "
+        f"Kd={best_gains['Kd'][0]:.1f}, Ki=0.1"
+    )
     return best_gains
 
 
