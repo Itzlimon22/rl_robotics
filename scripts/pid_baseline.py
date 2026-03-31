@@ -68,19 +68,11 @@ from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
 DEFAULT_GAINS = {
-    # Proportional gain: how hard to push toward goal
-    # Higher = faster response but more oscillation
-    "Kp": np.array([0.8, 0.8, 0.8]),  # [x, y, z]
-    # Integral gain: corrects for persistent errors (e.g. water current)
-    # Too high = windup and oscillation
-    "Ki": np.array([0.05, 0.05, 0.05]),
-    # Derivative gain: damps oscillation, anticipates overshoot
-    # Too high = noise amplification
-    "Kd": np.array([0.4, 0.4, 0.4]),
-    # Max force per axis (N) — matches 2-thruster differential max
+    "Kp": np.array([20.0, 20.0, 20.0]),
+    "Ki": np.array([0.1, 0.1, 0.1]),
+    "Kd": np.array([10.0, 10.0, 10.0]),
     "F_max": 20.0,
-    # Integral windup limit — prevents integral from growing unbounded
-    "windup_limit": 5.0,
+    "windup_limit": 8.0,
 }
 
 
