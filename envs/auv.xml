@@ -312,11 +312,28 @@
     <camera name="chase"  mode="trackcom" target="halcyon" pos="-3 0 1"    euler="0 0.3 0"/>
 
 
-    <geom name="obs_0" type="sphere" size="0.4" pos="3 0 0" rgba="0.8 0.2 0.2 0.7" contype="1" conaffinity="1" group="1" mass="0"/>
-    <geom name="obs_1" type="sphere" size="0.4" pos="-3 0 0" rgba="0.8 0.2 0.2 0.7" contype="1" conaffinity="1" group="1" mass="0"/>
-    <geom name="obs_2" type="sphere" size="0.4" pos="0 3 0" rgba="0.8 0.2 0.2 0.7" contype="1" conaffinity="1" group="1" mass="0"/>
-    <geom name="obs_3" type="sphere" size="0.4" pos="0 -3 0" rgba="0.8 0.2 0.2 0.7" contype="1" conaffinity="1" group="1" mass="0"/>
-    <geom name="obs_4" type="sphere" size="0.4" pos="2 2 1" rgba="0.8 0.2 0.2 0.7" contype="1" conaffinity="1" group="1" mass="0"/>
+    <!-- ── Static obstacles ────────────────────────────────────── -->
+    <!--
+      Obstacles are placed by Python env at each episode reset.
+      Using spherical geoms for simplicity — easily extensible to boxes.
+      Positions randomised via model.geom_pos in Python.
+      group=1 = visible in render, collisions enabled.
+    -->
+    <geom name="obs_0" type="sphere" size="0.4"
+          pos="3 0 0" rgba="0.8 0.2 0.2 0.7"
+          contype="1" conaffinity="1" group="1" mass="0"/>
+    <geom name="obs_1" type="sphere" size="0.4"
+          pos="-3 0 0" rgba="0.8 0.2 0.2 0.7"
+          contype="1" conaffinity="1" group="1" mass="0"/>
+    <geom name="obs_2" type="sphere" size="0.4"
+          pos="0 3 0" rgba="0.8 0.2 0.2 0.7"
+          contype="1" conaffinity="1" group="1" mass="0"/>
+    <geom name="obs_3" type="sphere" size="0.4"
+          pos="0 -3 0" rgba="0.8 0.2 0.2 0.7"
+          contype="1" conaffinity="1" group="1" mass="0"/>
+    <geom name="obs_4" type="sphere" size="0.4"
+          pos="2 2 1" rgba="0.8 0.2 0.2 0.7"
+          contype="1" conaffinity="1" group="1" mass="0"/>
 
   </worldbody>
 

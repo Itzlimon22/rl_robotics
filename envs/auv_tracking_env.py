@@ -5,10 +5,6 @@ The AUV must follow a smooth 3D lemniscate (figure-8) path.
 The goal marker moves along the path at a fixed speed.
 Success = staying within 1.0m of the path for the full episode,
 completing at least 95% of the trajectory.
-
-Features:
-- Predictive Lookahead: Agent observes the path 2 seconds ahead.
-- CDR Integration: Explicit is_success flag for the curriculum wrapper.
 """
 
 from __future__ import annotations
@@ -21,12 +17,6 @@ from envs.auv_env import HalcyonAUVEnv
 
 
 class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
-    """
-    Trajectory tracking variant of HalcyonAUVEnv.
-    Generates a smooth 3D lemniscate path at reset.
-    Goal marker follows the path at path_speed m/s.
-    """
-
     def __init__(
         self,
         path_radius: float = 4.0,
@@ -52,7 +42,7 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._tracking_errors: list = []
 
         # Extend observation space for the 3D lookahead vector
-        base_obs_space = self.observation_space
+        base_obs_space = self.observation_space  # FIXED: Removed super()
         low = np.append(base_obs_space.low, np.full(3, -20.0))
         high = np.append(base_obs_space.high, np.full(3, 20.0))
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
@@ -63,14 +53,14 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, Dict]:
 
-        # Reset base environment (places AUV at origin)
-        obs, info = super().reset(seed=seed, options=options)
-
-        # Generate lemniscate path
+        # FIXED: Generate path BEFORE calling super().reset()
         self._path_points = self._generate_lemniscate()
         self._path_idx = 0
         self._path_t = 0.0
         self._tracking_errors = []
+
+        # Reset base environment (places AUV at origin)
+        obs, info = super().reset(seed=seed, options=options)
 
         # Place goal at first path point
         self._goal_pos = self._path_points[0].copy()
@@ -101,9 +91,9 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._tracking_errors.append(tracking_error)
 
         # Add tracking reward component
-        tracking_reward = -0.5 * tracking_error  # penalise deviation from path
+        tracking_reward = -0.5 * tracking_error
         if tracking_error < self.tracking_threshold:
-            tracking_reward += 2.0  # bonus for staying on path
+            tracking_reward += 2.0
 
         reward += tracking_reward
 
@@ -113,7 +103,7 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
 
         path_progress = self._path_idx / max(self.n_path_points - 1, 1)
 
-        # CRITICAL FOR CDR: Define success as surviving + completing the path
+        # Success = surviving + completing the path
         is_success = bool((path_progress > 0.95) and not terminated)
 
         info["tracking_error"] = tracking_error
@@ -124,25 +114,28 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         return obs, reward, terminated, truncated, info
 
     def _get_observation(self) -> np.ndarray:
-        """
-        Extends the base 18-dim observation with a 3-dim lookahead vector.
-        This allows the policy to anticipate curves in the trajectory rather
-        than purely reacting to the immediate target marker.
-        """
-        # 1. Get the standard 18-dim observation
+        # 1. Get the standard base observation
         base_obs = super()._get_observation()
 
         # 2. Calculate lookahead position on the path
         lookahead_dist = self.path_speed * self.lookahead_time
         dist_accumulated = 0.0
         f_idx = self._path_idx
+        attempts = 0
 
-        while dist_accumulated < lookahead_dist:
+        # FIXED: Added attempts safety net to prevent infinite loops
+        while dist_accumulated < lookahead_dist and attempts < self.n_path_points:
             next_idx = (f_idx + 1) % self.n_path_points
-            dist_accumulated += np.linalg.norm(
-                self._path_points[next_idx] - self._path_points[f_idx]
+            step_dist = float(
+                np.linalg.norm(self._path_points[next_idx] - self._path_points[f_idx])
             )
+
+            if step_dist < 1e-5:
+                step_dist = 1e-5
+
+            dist_accumulated += step_dist
             f_idx = next_idx
+            attempts += 1
 
         future_pos = self._path_points[f_idx]
 
@@ -153,7 +146,6 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         vec_global = future_pos - auv_pos
         vec_body = np.zeros(3)
 
-        # Conjugate quaternion for global-to-body rotation mapping
         quat_conj = np.array([auv_quat[0], -auv_quat[1], -auv_quat[2], -auv_quat[3]])
         mujoco.mju_rotVecQuat(vec_body, vec_global, quat_conj)
 
@@ -163,11 +155,8 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         return extended_obs
 
     def _generate_lemniscate(self) -> np.ndarray:
-        """
-        Generate a smooth 3D lemniscate (figure-8) path.
-        """
         R = self.path_radius
-        A = 1.5  # vertical amplitude (m)
+        A = 1.5
         t = np.linspace(0, 2 * np.pi, self.n_path_points)
 
         denom = 1 + np.sin(t) ** 2
@@ -175,17 +164,13 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         y = R * np.sin(t) * np.cos(t) / denom
         z = A * np.sin(2 * t)
 
-        # Clamp z to valid depth range
         z = np.clip(z, -6.0, 6.0)
-
         return np.column_stack([x, y, z])
 
     def _advance_path(self):
-        """Move goal marker along path based on path_speed."""
         dt = self.effective_dt
         step_distance = self.path_speed * dt
 
-        # Move to next path point if close enough
         while self._path_idx < self.n_path_points - 1:
             next_idx = self._path_idx + 1
             segment_len = np.linalg.norm(
@@ -197,15 +182,12 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
             else:
                 break
 
-        # Wrap path (loop forever)
         if self._path_idx >= self.n_path_points - 1:
             self._path_idx = 0
 
-        # Update goal marker
         self._goal_pos = self._path_points[self._path_idx].copy()
         self._set_goal_body(self._goal_pos)
         mujoco.mj_forward(self.model, self.data)
 
     def get_path_points(self) -> np.ndarray:
-        """Return full path for visualisation."""
         return self._path_points.copy()

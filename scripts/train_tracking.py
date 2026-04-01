@@ -2,11 +2,13 @@
 train_tracking.py — Train SAC on trajectory tracking task
 ==========================================================
 Same setup as train.py but uses HalcyonAUVTrackingEnv.
+
+Usage:
+    python scripts/train_tracking.py --mode curriculum --seed 0 --steps 1000000
 """
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -16,7 +18,7 @@ for _p in [_REPO_ROOT, _ENVS_DIR]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-# Import core utilities from your existing train.py
+# Import everything from train.py and override env factory
 from train import (
     SAC_HYPERPARAMS,
     detect_device,
@@ -29,7 +31,6 @@ from train import (
     N_EVAL_EPS,
     CHECKPOINT_FREQ,
 )
-
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import (
     CallbackList,
@@ -37,9 +38,11 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
 )
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-
-from envs.auv_tracking_env import HalcyonAUVTrackingEnv
-from envs.auv_dr_wrapper import AUVDomainRandomWrapper
+from auv_tracking_env import HalcyonAUVTrackingEnv
+from auv_dr_wrapper import AUVDomainRandomWrapper
+import torch
+import json
+import time
 
 
 def make_tracking_train_env(xml_path, mode, seed):
@@ -69,7 +72,6 @@ def make_tracking_eval_env(xml_path, mode, seed, train_vn):
     eval_vn = VecNormalize(
         vec, norm_obs=True, norm_reward=False, clip_obs=10.0, gamma=0.99
     )
-    # Manual sync of normalisation statistics (crucial SB3 pattern)
     eval_vn.obs_rms = train_vn.obs_rms
     eval_vn.ret_rms = train_vn.ret_rms
     eval_vn.training = False
@@ -116,7 +118,6 @@ def train_tracking(args):
         ]
     )
 
-    print(f"\nStarting Trajectory Tracking Training: {args.mode} | Seed {args.seed}")
     model.learn(
         total_timesteps=args.steps,
         callback=callbacks,
@@ -127,7 +128,6 @@ def train_tracking(args):
     model.save(str(save_dir / "final_model"))
     train_env.save(str(save_dir / "vec_normalize.pkl"))
     print(f"\nDone in {(time.time() - t0) / 60:.1f} min | Saved: {save_dir}")
-
     train_env.close()
     eval_env.close()
 
