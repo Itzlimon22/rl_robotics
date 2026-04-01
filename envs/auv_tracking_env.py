@@ -52,7 +52,7 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._tracking_errors: list = []
 
         # Extend observation space for the 3D lookahead vector
-        base_obs_space = super().observation_space
+        base_obs_space = self.observation_space
         low = np.append(base_obs_space.low, np.full(3, -20.0))
         high = np.append(base_obs_space.high, np.full(3, 20.0))
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
