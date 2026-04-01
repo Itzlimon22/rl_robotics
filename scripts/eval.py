@@ -69,8 +69,8 @@ import numpy as np
 
 # ── Project imports ───────────────────────────────────────────────────────────
 _SCRIPT_DIR = Path(__file__).parent.resolve()
-_REPO_ROOT  = _SCRIPT_DIR.parent
-_ENVS_DIR   = _REPO_ROOT / "envs"
+_REPO_ROOT = _SCRIPT_DIR.parent
+_ENVS_DIR = _REPO_ROOT / "envs"
 
 for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
     if str(_p) not in sys.path:
@@ -85,18 +85,19 @@ from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG, make_auv_e
 # Push physics beyond TEST_PARAM_CONFIG to find breaking point.
 # ─────────────────────────────────────────────────────────────────────────────
 HARD_TEST_PARAM_CONFIG = {
-    "c_drag_lateral":  (0.60, 1.20),   # very high drag — twice the training max
-    "c_drag_axial":    (0.24, 0.48),
+    "c_drag_lateral": (0.60, 1.20),  # very high drag — twice the training max
+    "c_drag_axial": (0.24, 0.48),
     "buoyancy_offset": (-0.15, 0.20),  # strong buoyancy disturbance
-    "current_speed":   (0.40, 0.80),   # strong current — 2-4x training max
-    "added_mass":      (0.30, 0.60),
-    "act_efficiency":  (0.60, 0.90),   # significantly degraded thrusters
+    "current_speed": (0.40, 0.80),  # strong current — 2-4x training max
+    "added_mass": (0.30, 0.60),
+    "act_efficiency": (0.60, 0.90),  # significantly degraded thrusters
 }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Path resolution
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def resolve_base_dir() -> Path:
     """Find results base directory — Colab Drive or local."""
@@ -138,6 +139,7 @@ def resolve_run_dir(base: Path, mode: str, run_name: str) -> Path:
 # SAC evaluation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def evaluate_sac(
     run_dir: Path,
     xml_path: Path,
@@ -176,10 +178,12 @@ def evaluate_sac(
         from stable_baselines3 import SAC
         from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
     except ImportError:
-        raise ImportError("stable-baselines3 required: pip install stable-baselines3[extra]")
+        raise ImportError(
+            "stable-baselines3 required: pip install stable-baselines3[extra]"
+        )
 
-    model_path    = run_dir / "best_model.zip"
-    vecnorm_path  = run_dir / "vec_normalize.pkl"
+    model_path = run_dir / "best_model.zip"
+    vecnorm_path = run_dir / "vec_normalize.pkl"
 
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
@@ -200,8 +204,10 @@ def evaluate_sac(
             wrapper._test_mode = True
             # Monkey-patch _apply_test to use harder ranges
             import types
+
             def _apply_hard_test(self):
                 return self._sample_and_apply(HARD_TEST_PARAM_CONFIG)
+
             wrapper._apply_test = types.MethodType(_apply_hard_test, wrapper)
         return wrapper
 
@@ -211,47 +217,53 @@ def evaluate_sac(
     # The eval env must use the SAME running stats as the training env.
     # Otherwise the model sees observations in a different scale than it trained on.
     vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
-    vec_env.training    = False   # freeze stats — do not update during eval
-    vec_env.norm_reward = False   # raw rewards for interpretable metrics
+    vec_env.training = False  # freeze stats — do not update during eval
+    vec_env.norm_reward = False  # raw rewards for interpretable metrics
 
     # Load model
     model = SAC.load(str(model_path), env=vec_env)
 
     if verbose:
         test_label = "HARD test" if use_hard_test else "TEST"
-        print(f"[eval] Model loaded. Running {n_episodes} episodes on {test_label} distribution...")
+        print(
+            f"[eval] Model loaded. Running {n_episodes} episodes on {test_label} distribution..."
+        )
         if use_hard_test:
-            print(f"[eval] Hard test ranges: drag_lateral={HARD_TEST_PARAM_CONFIG['c_drag_lateral']}, "
-                  f"current={HARD_TEST_PARAM_CONFIG['current_speed']}")
+            print(
+                f"[eval] Hard test ranges: drag_lateral={HARD_TEST_PARAM_CONFIG['c_drag_lateral']}, "
+                f"current={HARD_TEST_PARAM_CONFIG['current_speed']}"
+            )
         else:
-            print(f"[eval] Test ranges: drag_lateral={TEST_PARAM_CONFIG['c_drag_lateral']}, "
-                  f"current={TEST_PARAM_CONFIG['current_speed']}")
+            print(
+                f"[eval] Test ranges: drag_lateral={TEST_PARAM_CONFIG['c_drag_lateral']}, "
+                f"current={TEST_PARAM_CONFIG['current_speed']}"
+            )
 
     # ── Run evaluation episodes ───────────────────────────────────────────────
-    episode_rewards    = []
-    episode_dists      = []
-    episode_energies   = []   # mean |action| per step — efficiency metric
-    episode_total_energy = [] # sum |action| per episode — total effort
-    episode_lengths    = []
-    successes          = 0
+    episode_rewards = []
+    episode_dists = []
+    episode_energies = []  # mean |action| per step — efficiency metric
+    episode_total_energy = []  # sum |action| per episode — total effort
+    episode_lengths = []
+    successes = 0
 
     goal_threshold = 0.5  # must match auv_env.py goal_threshold
 
     for ep in range(n_episodes):
-        obs          = vec_env.reset()
-        ep_reward    = 0.0
-        ep_actions   = []
-        ep_steps     = 0
-        done         = False
-        final_dist   = float("inf")
+        obs = vec_env.reset()
+        ep_reward = 0.0
+        ep_actions = []
+        ep_steps = 0
+        done = False
+        final_dist = float("inf")
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, info = vec_env.step(action)
 
-            ep_reward  += float(reward[0])
-            ep_actions.append(np.abs(action[0]))   # |action| for energy metric
-            ep_steps   += 1
+            ep_reward += float(reward[0])
+            ep_actions.append(np.abs(action[0]))  # |action| for energy metric
+            ep_steps += 1
 
             if done[0]:
                 final_dist = info[0].get("goal_dist", float("inf"))
@@ -263,11 +275,11 @@ def evaluate_sac(
 
         # Energy metrics
         if ep_actions:
-            actions_array = np.array(ep_actions)   # shape (steps, 4)
-            mean_energy   = float(np.mean(actions_array))        # mean |thrust| per step
-            total_energy  = float(np.sum(actions_array))         # total effort
+            actions_array = np.array(ep_actions)  # shape (steps, 4)
+            mean_energy = float(np.mean(actions_array))  # mean |thrust| per step
+            total_energy = float(np.sum(actions_array))  # total effort
         else:
-            mean_energy  = 0.0
+            mean_energy = 0.0
             total_energy = 0.0
 
         episode_energies.append(mean_energy)
@@ -280,45 +292,41 @@ def evaluate_sac(
         # Progress reporting
         if verbose and (ep + 1) % 10 == 0:
             current_sr = successes / (ep + 1) * 100
-            print(f"  {ep+1}/{n_episodes} episodes | success so far: {current_sr:.0f}%")
+            print(
+                f"  {ep + 1}/{n_episodes} episodes | success so far: {current_sr:.0f}%"
+            )
 
     vec_env.close()
 
     # ── Compute summary statistics ────────────────────────────────────────────
     results = {
-        "mode":              mode,
-        "run_dir":           str(run_dir),
-        "n_episodes":        n_episodes,
+        "mode": mode,
+        "run_dir": str(run_dir),
+        "n_episodes": n_episodes,
         "test_distribution": "hard" if use_hard_test else "standard",
-
         # Primary metrics
-        "success_rate":      float(successes / n_episodes),
-        "success_count":     int(successes),
-
+        "success_rate": float(successes / n_episodes),
+        "success_count": int(successes),
         # Reward metrics
-        "mean_reward":       float(np.mean(episode_rewards)),
-        "std_reward":        float(np.std(episode_rewards)),
-        "min_reward":        float(np.min(episode_rewards)),
-        "max_reward":        float(np.max(episode_rewards)),
-
+        "mean_reward": float(np.mean(episode_rewards)),
+        "std_reward": float(np.std(episode_rewards)),
+        "min_reward": float(np.min(episode_rewards)),
+        "max_reward": float(np.max(episode_rewards)),
         # Distance metrics
-        "mean_dist":         float(np.mean(episode_dists)),
-        "std_dist":          float(np.std(episode_dists)),
-
+        "mean_dist": float(np.mean(episode_dists)),
+        "std_dist": float(np.std(episode_dists)),
         # Energy metrics — KEY for paper comparison with PID
-        "mean_energy_per_step":  float(np.mean(episode_energies)),
-        "std_energy_per_step":   float(np.std(episode_energies)),
-        "mean_total_energy":     float(np.mean(episode_total_energy)),
-        "std_total_energy":      float(np.std(episode_total_energy)),
-
+        "mean_energy_per_step": float(np.mean(episode_energies)),
+        "std_energy_per_step": float(np.std(episode_energies)),
+        "mean_total_energy": float(np.mean(episode_total_energy)),
+        "std_total_energy": float(np.std(episode_total_energy)),
         # Episode length
-        "mean_episode_length":   float(np.mean(episode_lengths)),
-        "std_episode_length":    float(np.std(episode_lengths)),
-
+        "mean_episode_length": float(np.mean(episode_lengths)),
+        "std_episode_length": float(np.std(episode_lengths)),
         # Raw data for custom analysis
-        "episode_rewards":   episode_rewards,
-        "episode_dists":     episode_dists,
-        "episode_energies":  episode_energies,
+        "episode_rewards": episode_rewards,
+        "episode_dists": episode_dists,
+        "episode_energies": episode_energies,
     }
 
     return results
@@ -327,6 +335,7 @@ def evaluate_sac(
 # ─────────────────────────────────────────────────────────────────────────────
 # PID evaluation
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def evaluate_pid(
     xml_path: Path,
@@ -349,31 +358,33 @@ def evaluate_pid(
 
     # PID gains — must match pid_baseline.py tuned values
     Kp = np.array([20.0, 20.0, 20.0])
-    Ki = np.array([0.1,  0.1,  0.1])
+    Ki = np.array([0.1, 0.1, 0.1])
     Kd = np.array([10.0, 10.0, 10.0])
-    F_MAX        = 20.0
+    F_MAX = 20.0
     WINDUP_LIMIT = 8.0
 
     # PID uses larger goal threshold and more steps — fair for oscillatory control
-    GOAL_THRESHOLD   = 0.8    # larger than SAC's 0.5m
-    MAX_STEPS        = 1000   # 40 seconds — PID needs more time
+    GOAL_THRESHOLD = 0.8  # larger than SAC's 0.5m
+    MAX_STEPS = 1000  # 40 seconds — PID needs more time
 
     # Test ranges
     test_config = HARD_TEST_PARAM_CONFIG if use_hard_test else TEST_PARAM_CONFIG
 
     rng = np.random.default_rng(seed)
 
-    episode_rewards    = []
-    episode_dists      = []
-    episode_energies   = []
+    episode_rewards = []
+    episode_dists = []
+    episode_energies = []
     episode_total_energy = []
-    episode_lengths    = []
-    successes          = 0
+    episode_lengths = []
+    successes = 0
 
     for ep in range(n_episodes):
         # Create fresh environment each episode
         env = HalcyonAUVEnv(xml_path=str(xml_path))
-        wrapper = AUVDomainRandomWrapper(env, mode="uniform", seed=int(rng.integers(0, 10000)), verbose=False)
+        wrapper = AUVDomainRandomWrapper(
+            env, mode="uniform", seed=int(rng.integers(0, 10000)), verbose=False
+        )
 
         # Manually sample test physics
         wrapper._sample_and_apply(test_config)
@@ -381,20 +392,20 @@ def evaluate_pid(
         obs, info = wrapper.reset()
 
         # PID state
-        integral    = np.zeros(3)
-        prev_error  = np.zeros(3)
-        ep_reward   = 0.0
-        ep_actions  = []
-        ep_steps    = 0
+        integral = np.zeros(3)
+        prev_error = np.zeros(3)
+        ep_reward = 0.0
+        ep_actions = []
+        ep_steps = 0
 
         for step in range(MAX_STEPS):
             # Get AUV and goal positions from info
-            auv_pos  = np.array(info.get("auv_pos",  [0, 0, 0]))
+            auv_pos = np.array(info.get("auv_pos", [0, 0, 0]))
             goal_pos = np.array(info.get("goal_pos", [5, 0, 0]))
 
             # Position error in world frame
             error = goal_pos - auv_pos
-            dist  = float(np.linalg.norm(error))
+            dist = float(np.linalg.norm(error))
 
             # Check success
             if dist < GOAL_THRESHOLD:
@@ -402,10 +413,10 @@ def evaluate_pid(
                 break
 
             # PID computation
-            derivative  = (error - prev_error)
-            integral   += error
+            derivative = error - prev_error
+            integral += error
             # Anti-windup
-            integral    = np.clip(integral, -WINDUP_LIMIT, WINDUP_LIMIT)
+            integral = np.clip(integral, -WINDUP_LIMIT, WINDUP_LIMIT)
 
             # World-frame force command
             F_world = Kp * error + Ki * integral + Kd * derivative
@@ -417,13 +428,14 @@ def evaluate_pid(
             # Sway (Y):  left(+), right(-) differential
             Fx, Fy, Fz = F_world[0], F_world[1], F_world[2]
 
-            thrust_top   = np.clip(( Fx + Fz) / (2 * F_MAX), -1.0, 1.0)
-            thrust_bot   = np.clip(( Fx - Fz) / (2 * F_MAX), -1.0, 1.0)
-            thrust_left  = np.clip(( Fx + Fy) / (2 * F_MAX), -1.0, 1.0)
-            thrust_right = np.clip(( Fx - Fy) / (2 * F_MAX), -1.0, 1.0)
+            thrust_top = np.clip((Fx + Fz) / (2 * F_MAX), -1.0, 1.0)
+            thrust_bot = np.clip((Fx - Fz) / (2 * F_MAX), -1.0, 1.0)
+            thrust_left = np.clip((Fx + Fy) / (2 * F_MAX), -1.0, 1.0)
+            thrust_right = np.clip((Fx - Fy) / (2 * F_MAX), -1.0, 1.0)
 
-            action = np.array([thrust_top, thrust_bot, thrust_left, thrust_right],
-                              dtype=np.float32)
+            action = np.array(
+                [thrust_top, thrust_bot, thrust_left, thrust_right], dtype=np.float32
+            )
 
             prev_error = error.copy()
 
@@ -431,7 +443,7 @@ def evaluate_pid(
             obs, reward, terminated, truncated, info = wrapper.step(action)
             ep_reward += float(reward)
             ep_actions.append(np.abs(action))
-            ep_steps  += 1
+            ep_steps += 1
 
             if terminated or truncated:
                 final_dist = info.get("goal_dist", dist)
@@ -458,35 +470,31 @@ def evaluate_pid(
 
         if verbose and (ep + 1) % 10 == 0:
             current_sr = successes / (ep + 1) * 100
-            print(f"  {ep+1}/{n_episodes} episodes | success so far: {current_sr:.0f}%")
+            print(
+                f"  {ep + 1}/{n_episodes} episodes | success so far: {current_sr:.0f}%"
+            )
 
     results = {
-        "mode":              "pid",
-        "n_episodes":        n_episodes,
+        "mode": "pid",
+        "n_episodes": n_episodes,
         "test_distribution": "hard" if use_hard_test else "standard",
-
-        "success_rate":      float(successes / n_episodes),
-        "success_count":     int(successes),
-
-        "mean_reward":       float(np.mean(episode_rewards)),
-        "std_reward":        float(np.std(episode_rewards)),
-        "min_reward":        float(np.min(episode_rewards)),
-        "max_reward":        float(np.max(episode_rewards)),
-
-        "mean_dist":         float(np.mean(episode_dists)),
-        "std_dist":          float(np.std(episode_dists)),
-
-        "mean_energy_per_step":  float(np.mean(episode_energies)),
-        "std_energy_per_step":   float(np.std(episode_energies)),
-        "mean_total_energy":     float(np.mean(episode_total_energy)),
-        "std_total_energy":      float(np.std(episode_total_energy)),
-
-        "mean_episode_length":   float(np.mean(episode_lengths)),
-        "std_episode_length":    float(np.std(episode_lengths)),
-
-        "episode_rewards":   episode_rewards,
-        "episode_dists":     episode_dists,
-        "episode_energies":  episode_energies,
+        "success_rate": float(successes / n_episodes),
+        "success_count": int(successes),
+        "mean_reward": float(np.mean(episode_rewards)),
+        "std_reward": float(np.std(episode_rewards)),
+        "min_reward": float(np.min(episode_rewards)),
+        "max_reward": float(np.max(episode_rewards)),
+        "mean_dist": float(np.mean(episode_dists)),
+        "std_dist": float(np.std(episode_dists)),
+        "mean_energy_per_step": float(np.mean(episode_energies)),
+        "std_energy_per_step": float(np.std(episode_energies)),
+        "mean_total_energy": float(np.mean(episode_total_energy)),
+        "std_total_energy": float(np.std(episode_total_energy)),
+        "mean_episode_length": float(np.mean(episode_lengths)),
+        "std_episode_length": float(np.std(episode_lengths)),
+        "episode_rewards": episode_rewards,
+        "episode_dists": episode_dists,
+        "episode_energies": episode_energies,
     }
 
     return results
@@ -496,9 +504,10 @@ def evaluate_pid(
 # Results printing
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def print_results(results: Dict):
     """Print evaluation results in a clean readable format."""
-    mode  = results["mode"].upper()
+    mode = results["mode"].upper()
     label = f"Mode: {mode}"
     if "seed" in results:
         label += f"  Seed: {results['seed']}"
@@ -506,24 +515,35 @@ def print_results(results: Dict):
     print(f"\n{'=' * 55}")
     print(f"  TRANSFER EVAL — held-out test distribution")
     print(f"  {label}")
-    print(f"  Success rate: {results['success_rate']*100:.1f}%  "
-          f"({results['success_count']}/{results['n_episodes']})")
+    print(
+        f"  Success rate: {results['success_rate'] * 100:.1f}%  "
+        f"({results['success_count']}/{results['n_episodes']})"
+    )
     print(f"  Mean reward:  {results['mean_reward']:.2f} ± {results['std_reward']:.2f}")
     print(f"  Mean dist:    {results['mean_dist']:.2f}m ± {results['std_dist']:.2f}m")
-    print(f"  Energy/step:  {results['mean_energy_per_step']:.4f} ± "
-          f"{results['std_energy_per_step']:.4f}  (lower = more efficient)")
-    print(f"  Total energy: {results['mean_total_energy']:.2f} ± "
-          f"{results['std_total_energy']:.2f}  per episode")
-    print(f"  Episode len:  {results['mean_episode_length']:.1f} ± "
-          f"{results['std_episode_length']:.1f} steps")
+    print(
+        f"  Energy/step:  {results['mean_energy_per_step']:.4f} ± "
+        f"{results['std_energy_per_step']:.4f}  (lower = more efficient)"
+    )
+    print(
+        f"  Total energy: {results['mean_total_energy']:.2f} ± "
+        f"{results['std_total_energy']:.2f}  per episode"
+    )
+    print(
+        f"  Episode len:  {results['mean_episode_length']:.1f} ± "
+        f"{results['std_episode_length']:.1f} steps"
+    )
     print(f"{'=' * 55}")
 
 
 def save_results(results: Dict, save_path: Path):
     """Save results to JSON file."""
     # Remove raw episode data for smaller file (keep summary only)
-    save_data = {k: v for k, v in results.items()
-                 if k not in ["episode_rewards", "episode_dists", "episode_energies"]}
+    save_data = {
+        k: v
+        for k, v in results.items()
+        if k not in ["episode_rewards", "episode_dists", "episode_energies"]
+    }
     with open(save_path, "w") as f:
         json.dump(save_data, f, indent=2)
     print(f"\n[eval] Saved → {save_path}")
@@ -533,23 +553,28 @@ def save_results(results: Dict, save_path: Path):
 # Summary table across all conditions
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def print_summary_table(all_results: List[Dict]):
     """Print a clean comparison table of all conditions."""
     print(f"\n{'=' * 80}")
     print(f"  COMPLETE RESULTS SUMMARY — held-out test distribution")
     print(f"{'=' * 80}")
-    print(f"  {'Condition':<20} {'Success':>8} {'Reward':>12} {'Dist':>8} {'Energy/step':>12}")
-    print(f"  {'-'*20} {'-'*8} {'-'*12} {'-'*8} {'-'*12}")
+    print(
+        f"  {'Condition':<20} {'Success':>8} {'Reward':>12} {'Dist':>8} {'Energy/step':>12}"
+    )
+    print(f"  {'-' * 20} {'-' * 8} {'-' * 12} {'-' * 8} {'-' * 12}")
 
     for r in all_results:
-        mode  = r["mode"]
-        seed  = r.get("seed", "-")
+        mode = r["mode"]
+        seed = r.get("seed", "-")
         label = f"{mode} seed{seed}" if seed != "-" else mode
-        print(f"  {label:<20} "
-              f"{r['success_rate']*100:>7.1f}% "
-              f"{r['mean_reward']:>8.2f}±{r['std_reward']:<6.2f} "
-              f"{r['mean_dist']:>5.2f}m "
-              f"{r['mean_energy_per_step']:>8.4f}±{r['std_energy_per_step']:.4f}")
+        print(
+            f"  {label:<20} "
+            f"{r['success_rate'] * 100:>7.1f}% "
+            f"{r['mean_reward']:>8.2f}±{r['std_reward']:<6.2f} "
+            f"{r['mean_dist']:>5.2f}m "
+            f"{r['mean_energy_per_step']:>8.4f}±{r['std_energy_per_step']:.4f}"
+        )
 
     print(f"{'=' * 80}")
 
@@ -557,21 +582,23 @@ def print_summary_table(all_results: List[Dict]):
     modes = ["none", "uniform", "curriculum", "pid"]
     print(f"\n  MEAN ± STD ACROSS SEEDS:")
     print(f"  {'Condition':<15} {'Success':>10} {'Reward':>14} {'Energy/step':>14}")
-    print(f"  {'-'*15} {'-'*10} {'-'*14} {'-'*14}")
+    print(f"  {'-' * 15} {'-' * 10} {'-' * 14} {'-' * 14}")
 
     for mode in modes:
         mode_results = [r for r in all_results if r["mode"] == mode]
         if not mode_results:
             continue
 
-        sr_values  = [r["success_rate"] * 100 for r in mode_results]
+        sr_values = [r["success_rate"] * 100 for r in mode_results]
         rew_values = [r["mean_reward"] for r in mode_results]
         eng_values = [r["mean_energy_per_step"] for r in mode_results]
 
-        print(f"  {mode:<15} "
-              f"{np.mean(sr_values):>6.1f}±{np.std(sr_values):<6.1f}% "
-              f"{np.mean(rew_values):>7.2f}±{np.std(rew_values):<8.2f} "
-              f"{np.mean(eng_values):>7.4f}±{np.std(eng_values):.4f}")
+        print(
+            f"  {mode:<15} "
+            f"{np.mean(sr_values):>6.1f}±{np.std(sr_values):<6.1f}% "
+            f"{np.mean(rew_values):>7.2f}±{np.std(rew_values):<8.2f} "
+            f"{np.mean(eng_values):>7.4f}±{np.std(eng_values):.4f}"
+        )
 
     print(f"{'=' * 80}\n")
 
@@ -580,6 +607,7 @@ def print_summary_table(all_results: List[Dict]):
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Evaluate trained AUV policies on held-out test distribution.",
@@ -587,38 +615,72 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # What to evaluate
-    p.add_argument("--mode", type=str, default=None,
-                   choices=["none", "uniform", "curriculum"],
-                   help="DR mode to evaluate. Required unless --pid or --all.")
-    p.add_argument("--seed", type=int, default=None,
-                   help="Seed to evaluate. Required unless --all-seeds or --all.")
-    p.add_argument("--all-seeds", action="store_true",
-                   help="Evaluate all seeds (0, 1, 2) for the given --mode.")
-    p.add_argument("--all", action="store_true",
-                   help="Evaluate all 9 trained models (3 modes × 3 seeds).")
-    p.add_argument("--pid", action="store_true",
-                   help="Evaluate PID baseline instead of SAC.")
+    p.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["none", "uniform", "curriculum"],
+        help="DR mode to evaluate. Required unless --pid or --all.",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed to evaluate. Required unless --all-seeds or --all.",
+    )
+    p.add_argument(
+        "--all-seeds",
+        action="store_true",
+        help="Evaluate all seeds (0, 1, 2) for the given --mode.",
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="Evaluate all 9 trained models (3 modes × 3 seeds).",
+    )
+    p.add_argument(
+        "--pid", action="store_true", help="Evaluate PID baseline instead of SAC."
+    )
 
     # Evaluation settings
-    p.add_argument("--episodes", type=int, default=100,
-                   help="Number of evaluation episodes per model.")
-    p.add_argument("--hard-test", action="store_true",
-                   help="Use harder test distribution (HARD_TEST_PARAM_CONFIG).")
-    p.add_argument("--run-name", type=str, default=None,
-                   help="Custom run name. Default: <mode>_seed<seed>.")
+    p.add_argument(
+        "--episodes",
+        type=int,
+        default=100,
+        help="Number of evaluation episodes per model.",
+    )
+    p.add_argument(
+        "--hard-test",
+        action="store_true",
+        help="Use harder test distribution (HARD_TEST_PARAM_CONFIG).",
+    )
+    p.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Custom run name. Default: <mode>_seed<seed>.",
+    )
 
     # Paths
-    p.add_argument("--xml", type=str, default=None,
-                   help="Path to auv.xml. Auto-detected if not specified.")
-    p.add_argument("--base-dir", type=str, default=None,
-                   help="Base results directory. Auto-detected if not specified.")
+    p.add_argument(
+        "--xml",
+        type=str,
+        default=None,
+        help="Path to auv.xml. Auto-detected if not specified.",
+    )
+    p.add_argument(
+        "--base-dir",
+        type=str,
+        default=None,
+        help="Base results directory. Auto-detected if not specified.",
+    )
 
     return p
 
 
 def main():
     parser = build_parser()
-    args   = parser.parse_args()
+    args = parser.parse_args()
 
     # ── Resolve paths ─────────────────────────────────────────────────────────
     xml_path = Path(args.xml) if args.xml else resolve_xml_path()
@@ -634,10 +696,10 @@ def main():
     # ── PID evaluation ────────────────────────────────────────────────────────
     if args.pid:
         results = evaluate_pid(
-            xml_path     = xml_path,
-            n_episodes   = args.episodes,
-            use_hard_test= args.hard_test,
-            verbose      = True,
+            xml_path=xml_path,
+            n_episodes=args.episodes,
+            use_hard_test=args.hard_test,
+            verbose=True,
         )
         print_results(results)
 
@@ -647,15 +709,18 @@ def main():
 
     # ── Determine which models to evaluate ────────────────────────────────────
     if args.all:
-        eval_list = [(m, s) for m in ["none", "uniform", "curriculum"]
-                     for s in [0, 1, 2]]
+        eval_list = [
+            (m, s) for m in ["none", "uniform", "curriculum"] for s in [0, 1, 2]
+        ]
     elif args.all_seeds:
         if args.mode is None:
             parser.error("--all-seeds requires --mode")
         eval_list = [(args.mode, s) for s in [0, 1, 2]]
     else:
         if args.mode is None or args.seed is None:
-            parser.error("Provide --mode and --seed, or use --all / --all-seeds / --pid")
+            parser.error(
+                "Provide --mode and --seed, or use --all / --all-seeds / --pid"
+            )
         eval_list = [(args.mode, args.seed)]
 
     # ── Run evaluations ───────────────────────────────────────────────────────
@@ -665,7 +730,7 @@ def main():
         # Handle v2 reruns for seed 0
         if seed == 0:
             v2_name = f"{mode}_seed0_v2"
-            v2_dir  = base_dir / mode / v2_name
+            v2_dir = base_dir / mode / v2_name
             if v2_dir.exists():
                 run_name = v2_name
                 print(f"\n[eval] Using v2 rerun for seed 0: {run_name}")
@@ -678,13 +743,13 @@ def main():
 
         try:
             results = evaluate_sac(
-                run_dir      = run_dir,
-                xml_path     = xml_path,
-                mode         = mode,
-                n_episodes   = args.episodes,
-                use_hard_test= args.hard_test,
-                seed         = 9999 + seed,
-                verbose      = True,
+                run_dir=run_dir,
+                xml_path=xml_path,
+                mode=mode,
+                n_episodes=args.episodes,
+                use_hard_test=args.hard_test,
+                seed=9999 + seed,
+                verbose=True,
             )
             results["seed"] = seed
             results["run_name"] = run_name
@@ -700,6 +765,7 @@ def main():
         except Exception as e:
             print(f"\n[eval] ERROR evaluating {mode} seed {seed}: {e}")
             import traceback
+
             traceback.print_exc()
             continue
 
@@ -711,10 +777,13 @@ def main():
         summary_path = base_dir / "eval_summary.json"
         summary_data = []
         for r in all_results:
-            summary_data.append({
-                k: v for k, v in r.items()
-                if k not in ["episode_rewards", "episode_dists", "episode_energies"]
-            })
+            summary_data.append(
+                {
+                    k: v
+                    for k, v in r.items()
+                    if k not in ["episode_rewards", "episode_dists", "episode_energies"]
+                }
+            )
         with open(summary_path, "w") as f:
             json.dump(summary_data, f, indent=2)
         print(f"[eval] Complete summary saved → {summary_path}")
