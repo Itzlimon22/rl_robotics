@@ -891,3 +891,19 @@ if __name__ == "__main__":
     print("Next commands:")
     print("  from auv_dr_wrapper import make_auv_env, make_training_callbacks")
     print("  env = make_auv_env('envs/auv.xml', mode='curriculum', seed=0)")
+
+
+def make_tracking_env(
+    xml_path: str,
+    mode: str = "curriculum",
+    seed: Optional[int] = None,
+    path_speed: float = 0.3,
+):
+    """
+    One-liner factory for trajectory tracking env with DR.
+    Stack: HalcyonAUVTrackingEnv → AUVDomainRandomWrapper
+    """
+    from envs.auv_tracking_env import HalcyonAUVTrackingEnv
+
+    base = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=path_speed)
+    return AUVDomainRandomWrapper(base, mode=mode, seed=seed)
