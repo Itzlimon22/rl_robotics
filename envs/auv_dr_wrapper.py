@@ -379,7 +379,6 @@ class AUVDomainRandomWrapper(Wrapper):
             "act_efficiency": float(np.mean(eff)),
             "pos_noise": self.env.physics_params.get("pos_noise_std", 0.0),
             "vel_noise": self.env.physics_params.get("vel_noise_std", 0.0),
-            "ang_noise": self.env.physics_params.get("ang_noise_std", 0.0),
         }
 
     # ─────────────────────────────────────────────────────────────────────────
