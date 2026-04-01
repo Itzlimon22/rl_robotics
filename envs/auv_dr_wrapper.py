@@ -76,6 +76,10 @@ PARAM_CONFIG: Dict[str, Dict[str, float]] = {
     "current_speed": dict(min_lo=0.00, start_lo=0.00, start_hi=0.10, max_hi=0.30),
     "added_mass": dict(min_lo=0.05, start_lo=0.10, start_hi=0.20, max_hi=0.30),
     "act_efficiency": dict(min_lo=0.80, start_lo=0.95, start_hi=1.00, max_hi=1.00),
+    # Sensor noise parameters (NEW)
+    "pos_noise_std": dict(min_lo=0.00, start_lo=0.00, start_hi=0.02, max_hi=0.10),
+    "vel_noise_std": dict(min_lo=0.00, start_lo=0.00, start_hi=0.01, max_hi=0.05),
+    "ang_noise_std": dict(min_lo=0.00, start_lo=0.00, start_hi=0.005, max_hi=0.02),
 }
 
 # Held-out test distribution — NEVER seen during training.
@@ -87,6 +91,9 @@ TEST_PARAM_CONFIG: Dict[str, Tuple[float, float]] = {
     "current_speed": (0.20, 0.60),
     "added_mass": (0.20, 0.50),
     "act_efficiency": (0.70, 1.00),
+    "pos_noise_std": (0.05, 0.15),  # stronger noise in test
+    "vel_noise_std": (0.02, 0.08),
+    "ang_noise_std": (0.01, 0.04),
 }
 
 
@@ -349,6 +356,20 @@ class AUVDomainRandomWrapper(Wrapper):
         eff = r.uniform(eff_lo, eff_hi, size=4).astype(np.float32)
         self.env.physics_params["actuator_efficiency"] = eff
 
+        # Sensor noise (NEW)
+        if "pos_noise_std" in ranges:
+            self.env.physics_params["pos_noise_std"] = float(
+                r.uniform(*ranges["pos_noise_std"])
+            )
+        if "vel_noise_std" in ranges:
+            self.env.physics_params["vel_noise_std"] = float(
+                r.uniform(*ranges["vel_noise_std"])
+            )
+        if "ang_noise_std" in ranges:
+            self.env.physics_params["ang_noise_std"] = float(
+                r.uniform(*ranges["ang_noise_std"])
+            )
+
         return {
             "c_drag_lateral": c_dl,
             "c_drag_axial": c_da,
@@ -356,6 +377,8 @@ class AUVDomainRandomWrapper(Wrapper):
             "current_speed": speed,
             "added_mass": am,
             "act_efficiency": float(np.mean(eff)),
+            "pos_noise": self.env.physics_params.get("pos_noise_std", 0.0),
+            "vel_noise": self.env.physics_params.get("vel_noise_std", 0.0),
         }
 
     # ─────────────────────────────────────────────────────────────────────────

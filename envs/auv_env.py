@@ -129,6 +129,14 @@ DEFAULT_PHYSICS = {
     # Actuator efficiency scaling (1.0 = nominal, <1 = degraded thruster).
     # Applied as a multiplier on data.ctrl before physics step.
     "actuator_efficiency": np.ones(4, dtype=np.float32),
+    # Sensor noise (NEW)
+    # Standard deviation of Gaussian noise added to each sensor reading.
+    # Zero = clean simulation (default). Real AUVs: position 0.05-0.20m,
+    # velocity 0.02-0.10 m/s, angular 0.01-0.05 rad/s.
+    "pos_noise_std": 0.0,  # position sensor noise (m)
+    "vel_noise_std": 0.0,  # velocity sensor noise (m/s)
+    "ang_noise_std": 0.0,  # angular velocity noise (rad/s)
+    "imu_noise_std": 0.0,  # IMU accelerometer noise (m/s^2)
 }
 
 
@@ -644,6 +652,26 @@ class HalcyonAUVEnv(Env):
 
         # Depth (world Z position — AUV should stay within workspace)
         depth = float(auv_pos_world[2])
+
+        # Apply sensor noise if configured
+        p = self.physics_params
+        if p.get("pos_noise_std", 0.0) > 0:
+            goal_dist_clipped += float(self.np_random.normal(0, p["pos_noise_std"]))
+        goal_dist_clipped = np.clip(goal_dist_clipped, 0.0, 20.0)
+
+        if p.get("vel_noise_std", 0.0) > 0:
+            lin_vel_body = np.clip(
+                lin_vel_body + self.np_random.normal(0, p["vel_noise_std"], 3),
+                -3.0,
+                3.0,
+            )
+
+        if p.get("ang_noise_std", 0.0) > 0:
+            ang_vel_body = np.clip(
+                ang_vel_body + self.np_random.normal(0, p["ang_noise_std"], 3),
+                -2.0,
+                2.0,
+            )
 
         obs = np.array(
             [

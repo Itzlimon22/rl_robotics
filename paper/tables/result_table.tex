@@ -1,0 +1,20 @@
+=== PAPER TABLE 2 — Transfer Evaluation (held-out test distribution) ===
+
+
+
+=== LaTeX ===
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\hline
+Method & Success Rate (\%) & Mean Reward & Mean Dist (m) \\
+\hline
+Naive SAC & $60.7 \pm 27.2$ & $23.8 \pm 27.6$ & $0.96 \pm 0.30$ \\
+Uniform DR & $99.7 \pm 0.5$ & $77.9 \pm 0.6$ & $0.47 \pm 0.00$ \\
+\textbf{CDR (Ours)} & $96.0 \pm 3.7$ & $75.4 \pm 1.7$ & $0.53 \pm 0.08$ \\
+\hline
+\end{tabular}
+\caption{Transfer evaluation on held-out test distribution.}
+\label{tab:transfer_results}
+\end{table}
