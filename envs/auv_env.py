@@ -675,17 +675,18 @@ class HalcyonAUVEnv(Env):
 
         obs = np.array(
             [
-                *goal_vec_body,  # [0:3]
-                goal_dist_clipped,  # [3]
-                *np.clip(lin_vel_body, -3.0, 3.0),  # [4:7]
-                *np.clip(ang_vel_body, -2.0, 2.0),  # [7:10]
-                *np.clip(euler, -np.pi, np.pi),  # [10:13]
-                *self._prev_action,  # [13:16]
-                current_speed,  # [16]
-                np.clip(depth, -20.0, 20.0),  # [17]
+                *goal_vec_body,
+                goal_dist_clipped,
+                *np.clip(lin_vel_body, -3.0, 3.0),
+                *np.clip(ang_vel_body, -2.0, 2.0),
+                *np.clip(euler, -np.pi, np.pi),
+                *self._prev_action,
+                current_speed,
+                np.clip(depth, -20.0, 20.0),
             ],
             dtype=np.float32,
         )
+
         return obs
 
     # ─────────────────────────────────────────────────────────────────────────
