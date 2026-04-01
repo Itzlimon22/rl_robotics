@@ -657,7 +657,7 @@ class HalcyonAUVEnv(Env):
         p = self.physics_params
         if p.get("pos_noise_std", 0.0) > 0:
             goal_dist_clipped += float(self.np_random.normal(0, p["pos_noise_std"]))
-        goal_dist_clipped = np.clip(goal_dist_clipped, 0.0, 20.0)
+            goal_dist_clipped = np.clip(goal_dist_clipped, 0.0, 20.0)
 
         if p.get("vel_noise_std", 0.0) > 0:
             lin_vel_body = np.clip(
