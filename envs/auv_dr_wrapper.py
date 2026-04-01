@@ -907,3 +907,21 @@ def make_tracking_env(
 
     base = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=path_speed)
     return AUVDomainRandomWrapper(base, mode=mode, seed=seed)
+
+
+def make_obstacle_env(
+    xml_path: str,
+    mode: str = "curriculum",
+    seed: Optional[int] = None,
+    n_obstacles: int = 5,
+):
+    """
+    One-liner factory for obstacle avoidance env with DR.
+    Stack: HalcyonAUVEnv → ObstacleAUVWrapper → AUVDomainRandomWrapper
+    """
+    from envs.auv_env import HalcyonAUVEnv
+    from envs.auv_obstacle_env import ObstacleAUVWrapper
+
+    base = HalcyonAUVEnv(xml_path=xml_path)
+    obs_env = ObstacleAUVWrapper(base, n_obstacles=n_obstacles)
+    return AUVDomainRandomWrapper(obs_env, mode=mode, seed=seed)
