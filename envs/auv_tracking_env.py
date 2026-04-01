@@ -3,15 +3,20 @@ auv_tracking_env.py — Trajectory tracking task for Halcyon AUV
 ===============================================================
 The AUV must follow a smooth 3D lemniscate (figure-8) path.
 The goal marker moves along the path at a fixed speed.
-Success = staying within 1.0m of the path for the full episode.
+Success = staying within 1.0m of the path for the full episode,
+completing at least 95% of the trajectory.
+
+Features:
+- Predictive Lookahead: Agent observes the path 2 seconds ahead.
+- CDR Integration: Explicit is_success flag for the curriculum wrapper.
 """
 
 from __future__ import annotations
 import numpy as np
 import mujoco
+from gymnasium import spaces
 from typing import Optional, Dict, Any, Tuple
 
-# Assuming this is accessible based on your structure
 from envs.auv_env import HalcyonAUVEnv
 
 
@@ -29,6 +34,7 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         tracking_threshold: float = 1.0,
         max_tracking_error: float = 5.0,
         n_path_points: int = 500,
+        lookahead_time: float = 2.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -37,6 +43,7 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self.tracking_threshold = tracking_threshold
         self.max_tracking_error = max_tracking_error
         self.n_path_points = n_path_points
+        self.lookahead_time = lookahead_time
 
         # Path state
         self._path_points: np.ndarray = np.zeros((n_path_points, 3))
@@ -44,12 +51,19 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._path_t: float = 0.0
         self._tracking_errors: list = []
 
+        # Extend observation space for the 3D lookahead vector
+        base_obs_space = super().observation_space
+        low = np.append(base_obs_space.low, np.full(3, -20.0))
+        high = np.append(base_obs_space.high, np.full(3, 20.0))
+        self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
+
     def reset(
         self,
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, Dict]:
-        # Reset base environment
+
+        # Reset base environment (places AUV at origin)
         obs, info = super().reset(seed=seed, options=options)
 
         # Generate lemniscate path
@@ -65,9 +79,12 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
 
         self._prev_dist = self._goal_distance()
 
+        # Recompute observation to include the new path state
         obs = self._get_observation()
         info["tracking_error"] = 0.0
         info["path_progress"] = 0.0
+        info["is_success"] = False
+
         return obs, info
 
     def step(self, action):
@@ -76,8 +93,8 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         # Advance path marker
         self._advance_path()
 
-        # Compute tracking error
-        auv_pos = np.array(info["auv_pos"])
+        # Compute tracking error (distance to current target point)
+        auv_pos = np.array(info.get("auv_pos", self.data.qpos[:3]))
         tracking_error = float(
             np.linalg.norm(auv_pos - self._path_points[self._path_idx])
         )
@@ -96,11 +113,54 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
 
         path_progress = self._path_idx / max(self.n_path_points - 1, 1)
 
+        # CRITICAL FOR CDR: Define success as surviving + completing the path
+        is_success = bool((path_progress > 0.95) and not terminated)
+
         info["tracking_error"] = tracking_error
         info["path_progress"] = path_progress
         info["mean_tracking_error"] = float(np.mean(self._tracking_errors))
+        info["is_success"] = is_success
 
         return obs, reward, terminated, truncated, info
+
+    def _get_observation(self) -> np.ndarray:
+        """
+        Extends the base 18-dim observation with a 3-dim lookahead vector.
+        This allows the policy to anticipate curves in the trajectory rather
+        than purely reacting to the immediate target marker.
+        """
+        # 1. Get the standard 18-dim observation
+        base_obs = super()._get_observation()
+
+        # 2. Calculate lookahead position on the path
+        lookahead_dist = self.path_speed * self.lookahead_time
+        dist_accumulated = 0.0
+        f_idx = self._path_idx
+
+        while dist_accumulated < lookahead_dist:
+            next_idx = (f_idx + 1) % self.n_path_points
+            dist_accumulated += np.linalg.norm(
+                self._path_points[next_idx] - self._path_points[f_idx]
+            )
+            f_idx = next_idx
+
+        future_pos = self._path_points[f_idx]
+
+        # 3. Transform future_pos into the AUV's local body frame
+        auv_pos = self.data.qpos[:3]
+        auv_quat = self.data.qpos[3:7]  # [w, x, y, z]
+
+        vec_global = future_pos - auv_pos
+        vec_body = np.zeros(3)
+
+        # Conjugate quaternion for global-to-body rotation mapping
+        quat_conj = np.array([auv_quat[0], -auv_quat[1], -auv_quat[2], -auv_quat[3]])
+        mujoco.mju_rotVecQuat(vec_body, vec_global, quat_conj)
+
+        # 4. Append the 3D lookahead vector to the observation
+        extended_obs = np.append(base_obs, vec_body).astype(np.float32)
+
+        return extended_obs
 
     def _generate_lemniscate(self) -> np.ndarray:
         """
