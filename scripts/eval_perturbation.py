@@ -1,158 +1,221 @@
 """
-eval_perturbation.py — Phase 5: Sensor Glitch Recovery Evaluation
-=================================================================
-Loads a trained model and applies a temporary sensor failure
-(heavy noise on rangefinders) mid-episode to evaluate robustness.
+eval_perturbation.py — Mid-episode perturbation recovery evaluation
+================================================================================
+Applies a sudden impulse force at step T_perturb during each episode.
+Supports both standard Goal-Reaching models and Trajectory Tracking models.
 """
 
+from __future__ import annotations
+
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
+from typing import Dict
+
 import numpy as np
 
 _SCRIPT_DIR = Path(__file__).parent.resolve()
 _REPO_ROOT = _SCRIPT_DIR.parent
-for _p in [_REPO_ROOT, _REPO_ROOT / "envs"]:
+_ENVS_DIR = _REPO_ROOT / "envs"
+for _p in [_REPO_ROOT, _ENVS_DIR]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from envs.auv_dr_wrapper import make_auv_env, make_tracking_env, make_obstacle_env
+
+from auv_env import HalcyonAUVEnv
+from auv_dr_wrapper import AUVDomainRandomWrapper
+
+try:
+    from auv_tracking_env import HalcyonAUVTrackingEnv
+except ImportError:
+    pass
+
+# Constants for the Perturbation Test
+N_EPISODES = 50
+T_PERTURB = 100  # Apply impulse at exactly step 100
+IMPULSE_N = 40.0  # Impulse force magnitude (N) — 2x max thruster force
+IMPULSE_DUR = 5  # Impulse duration in steps (~0.2 seconds)
 
 
-def run_perturbation_eval(
-    model_path: str,
-    xml_path: str,
-    mode: str,
-    seed: int,
-    task: str,
-    n_episodes: int = 50,
-):
-    model_file = Path(model_path) / "final_model.zip"
-    vec_file = Path(model_path) / "vec_normalize.pkl"
+def apply_impulse(
+    env_unwrapped: HalcyonAUVEnv, step_count: int, impulse_active: Dict
+) -> bool:
+    """Injects a force vector into the MuJoCo engine's applied forces tensor."""
+    if T_PERTURB <= step_count < T_PERTURB + IMPULSE_DUR:
+        if step_count == T_PERTURB:
+            direction = np.random.standard_normal(3)
+            direction[2] *= 0.2  # Dampen vertical throw
+            direction /= np.linalg.norm(direction) + 1e-8
+            impulse_active["dir"] = direction
 
-    if not model_file.exists() or not vec_file.exists():
-        print(f"ERROR: Model or vec_normalize not found in {model_path}")
-        sys.exit(1)
+        d = impulse_active.get("dir", np.array([1.0, 0.0, 0.0]))
+        env_unwrapped.data.xfrc_applied[env_unwrapped._auv_body_id, 0:3] += (
+            d * IMPULSE_N
+        )
+        return True
+    return False
 
-    print(f"\nLoading Model: {mode.upper()} (Task: {task}, Seed: {seed})")
 
-    # 1. Setup Eval Environment
-    def _init():
-        if task == "obstacle":
-            env = make_obstacle_env(xml_path, mode=mode, seed=seed)
-        elif task == "tracking":
-            env = make_tracking_env(xml_path, mode=mode, seed=seed)
+def evaluate_perturbation(args: argparse.Namespace):
+    """Runs the perturbation test on a trained SAC policy."""
+    on_colab = os.path.exists("/content/drive/MyDrive")
+    base = (
+        Path("/content/drive/MyDrive/rl_research/auv")
+        if on_colab
+        else Path.home() / "rl_research" / "auv"
+    )
+
+    # 1. Resolve correct folder based on task
+    if args.is_tracking:
+        run_name = args.run_name or f"tracking_{args.mode}_seed{args.seed}"
+        mode_dir = f"tracking_{args.mode}"
+    else:
+        run_name = args.run_name or f"{args.mode}_seed{args.seed}"
+        mode_dir = args.mode
+
+    run_dir = base / mode_dir / run_name
+    if not run_dir.exists():
+        run_dir = base / mode_dir / f"{run_name}_v1"
+
+    if not run_dir.exists():
+        raise FileNotFoundError(f"Could not find run directory: {run_dir}")
+
+    xml_candidates = [
+        _ENVS_DIR / "auv.xml",
+        Path.home() / "rl_robotics" / "envs" / "auv.xml",
+    ]
+    xml_path = next((p for p in xml_candidates if p.exists()), None)
+
+    # 2. Build the correct environment
+    def _make_env():
+        if args.is_tracking:
+            env = HalcyonAUVTrackingEnv(xml_path=str(xml_path), path_speed=0.3)
         else:
-            env = make_auv_env(xml_path, mode=mode, seed=seed)
+            env = HalcyonAUVEnv(xml_path=str(xml_path))
 
-        env.set_test_distribution()  # Test on hard physics
-        return env
+        wrapper = AUVDomainRandomWrapper(env, mode="uniform", seed=args.seed + 9999)
+        wrapper.set_test_distribution()  # Force hard test conditions
+        return wrapper
 
-    venv = DummyVecEnv([_init])
-    env = VecNormalize.load(str(vec_file), venv)
-    env.training = False
-    env.norm_reward = False
+    vec_env = DummyVecEnv([_make_env])
+    vec_env = VecNormalize.load(str(run_dir / "vec_normalize.pkl"), vec_env)
+    vec_env.training = False
+    vec_env.norm_reward = False
 
-    model = SAC.load(str(model_file), env=env)
+    model = SAC.load(str(run_dir / "best_model"), env=vec_env)
+    base_env = vec_env.venv.envs[0].env.env
 
-    # 2. Tracking Metrics
-    successes = 0
-    recovery_steps_list = []
-    energy_used_list = []
+    label = f"TRACKING {args.mode}" if args.is_tracking else f"STATIC {args.mode}"
+    print(
+        f"\n[perturb] {label} seed={args.seed} | Impulse={IMPULSE_N}N at step {T_PERTURB}\n"
+    )
 
-    # 3. Evaluation Loop
-    for ep in range(n_episodes):
-        obs = env.reset()
-        done = False
-        step_count = 0
+    recovery_steps_list, post_success_list, energy_recovery_list = [], [], []
 
-        # Track recovery state
-        pre_perturb_dist = 0.0
-        is_recovering = False
-        recovery_steps = 0
-        ep_energy = 0.0
+    obs = vec_env.reset()
+    ep_count = step_count = recovery_steps = 0
+    ep_energy = 0.0
+    pre_perturb_dist = None
+    perturbed = recovered = False
+    impulse_active = {}
 
-        while not done:
-            # --- THE PERTURBATION TRIGGER (SENSOR GLITCH) ---
-            # Between step 100 and 110, the rangefinders glitch and output noise
-            if 100 <= step_count <= 110 and task == "obstacle":
-                # Save actual pre-glitch distance on the first step of the glitch
-                if step_count == 100:
-                    base_env = env.venv.envs[0].env.unwrapped
-                    pre_perturb_dist = base_env._goal_distance()
-                    is_recovering = True
+    while ep_count < N_EPISODES:
+        action, _ = model.predict(obs, deterministic=True)
+        apply_impulse(base_env, step_count, impulse_active)
 
-                # Corrupt the rangefinder data (last 4 indices) with heavy Gaussian noise
-                obs_copy = obs.copy()
-                obs_copy[0, -4:] += np.random.normal(0, 5.0, size=(4,))
-                action, _ = model.predict(obs_copy, deterministic=True)
-            else:
-                action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, info = vec_env.step(action)
+        ep_energy += float(np.mean(np.abs(action[0])))
 
-            # --- TRACK RECOVERY ---
-            base_env = env.venv.envs[0].env.unwrapped
-            current_dist = base_env._goal_distance()
+        # 3. Track the correct metric (goal_dist vs tracking_error)
+        dist_key = "tracking_error" if args.is_tracking else "goal_dist"
+        current_dist = float(info[0].get(dist_key, float("inf")))
 
-            if is_recovering:
-                recovery_steps += 1
-                # Recovered if we get back to the pre-glitch distance (after the glitch ends)
-                if step_count > 110 and current_dist <= pre_perturb_dist:
-                    is_recovering = False
-                    recovery_steps_list.append(recovery_steps)
+        if step_count == T_PERTURB - 1:
+            pre_perturb_dist = current_dist
+            perturbed = True
+            recovered = False
+            recovery_steps = 0
 
-            # Step environment
-            obs, reward, done, info = env.step(action)
-            ep_energy += np.sum(np.abs(action))
+        if perturbed and not recovered and step_count >= T_PERTURB + IMPULSE_DUR:
+            recovery_steps += 1
+            # Recovery logic: Must get back within 1.0m OR 120% of pre-hit distance
+            threshold = max(pre_perturb_dist * 1.2, 1.0)
+            if pre_perturb_dist is not None and current_dist <= threshold:
+                recovered = True
+
+        if done[0]:
+            success = (
+                info[0].get("is_success", current_dist < 0.5)
+                if args.is_tracking
+                else current_dist < 0.5
+            )
+            post_success_list.append(float(success))
+            recovery_steps_list.append(recovery_steps if recovered else 500)
+            energy_recovery_list.append(ep_energy)
+
+            ep_count += 1
+            step_count = recovery_steps = 0
+            ep_energy = 0.0
+            pre_perturb_dist = None
+            perturbed = recovered = False
+            impulse_active = {}
+
+            if ep_count % 10 == 0:
+                print(
+                    f"  {ep_count}/{N_EPISODES} | "
+                    f"success={np.mean(post_success_list) * 100:.0f}% | "
+                    f"mean_recovery={np.mean(recovery_steps_list):.1f} steps"
+                )
+        else:
             step_count += 1
 
-            if done:
-                if info[0].get("is_success", False):
-                    successes += 1
-                energy_used_list.append(ep_energy)
-                # If it never recovered before episode ended
-                if is_recovering:
-                    recovery_steps_list.append(500)
+    results = {
+        "mode": args.mode,
+        "seed": args.seed,
+        "task": "tracking" if args.is_tracking else "static_goal",
+        "impulse_N": IMPULSE_N,
+        "post_perturbation_success_rate": float(np.mean(post_success_list)),
+        "mean_recovery_steps": float(np.mean(recovery_steps_list)),
+        "std_recovery_steps": float(np.std(recovery_steps_list)),
+    }
 
-    # 4. Print Results
-    sr = (successes / n_episodes) * 100
-    # Handle case where it never recovers
-    if len(recovery_steps_list) == 0:
-        mean_recovery = float("inf")
-    else:
-        mean_recovery = np.mean(recovery_steps_list)
+    print(f"\n{'=' * 55}")
+    print(f"  PERTURBATION RECOVERY — {label.upper()} seed={args.seed}")
+    print(
+        f"  Post-perturbation success: {results['post_perturbation_success_rate'] * 100:.1f}%"
+    )
+    print(
+        f"  Mean recovery steps:       {results['mean_recovery_steps']:.1f} ± {results['std_recovery_steps']:.1f}"
+    )
+    print(f"{'=' * 55}\n")
 
-    mean_energy = np.mean(energy_used_list)
+    out = run_dir / "perturbation_results.json"
+    with open(out, "w") as f:
+        json.dump(results, f, indent=2)
+    vec_env.close()
 
-    print("-" * 40)
-    print(f"Results for {mode.upper()} under Sensor Glitch Perturbation")
-    print("-" * 40)
-    print(f"Success Rate:         {sr:.1f}%")
-    print(f"Mean Recovery Steps:  {mean_recovery:.1f} steps")
-    print(f"Mean Absolute Thrust: {mean_energy:.1f} N")
-    print("-" * 40)
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Evaluate recovery from mid-episode physics perturbations."
+    )
+    p.add_argument("--mode", required=True, choices=["none", "uniform", "curriculum"])
+    p.add_argument("--seed", type=int, required=True)
+    p.add_argument(
+        "--is-tracking",
+        action="store_true",
+        help="Evaluate a tracking model instead of static goal",
+    )
+    p.add_argument("--run-name", type=str, default=None)
+    return p
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model_dir",
-        type=str,
-        required=True,
-        help="Path to folder containing final_model.zip",
-    )
-    parser.add_argument("--xml", type=str, default="envs/auv.xml")
-    parser.add_argument(
-        "--mode", type=str, required=True, choices=["none", "uniform", "curriculum"]
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--task", type=str, default="obstacle", choices=["base", "tracking", "obstacle"]
-    )
-    args = parser.parse_args()
-
-    run_perturbation_eval(args.model_dir, args.xml, args.mode, args.seed, args.task)
+    evaluate_perturbation(build_parser().parse_args())
 
 
 if __name__ == "__main__":

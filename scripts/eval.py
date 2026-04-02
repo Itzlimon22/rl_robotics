@@ -1,5 +1,9 @@
 """
 eval.py — Held-out Transfer Evaluation Script
+================================================================================
+Evaluates trained SAC models and PID baselines on the AUV environment.
+Calculates success rates, reward statistics, and critical hardware metrics
+(Energy per Step and Peak Thrust) necessary for sim-to-real transfer validation.
 """
 
 from __future__ import annotations
@@ -8,7 +12,6 @@ import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -23,7 +26,7 @@ for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
         sys.path.insert(0, str(_p))
 
 from auv_env import HalcyonAUVEnv
-from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG, make_auv_env
+from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
 
 HARD_TEST_PARAM_CONFIG = {
     "c_drag_lateral": (0.60, 1.20),
@@ -36,6 +39,7 @@ HARD_TEST_PARAM_CONFIG = {
 
 
 def resolve_base_dir() -> Path:
+    """Resolves the base directory depending on local vs Colab execution."""
     on_colab = os.path.exists("/content/drive/MyDrive")
     if on_colab:
         return Path("/content/drive/MyDrive/rl_research/auv")
@@ -43,6 +47,7 @@ def resolve_base_dir() -> Path:
 
 
 def resolve_xml_path() -> Path:
+    """Locates the auv.xml file across common directories."""
     candidates = [
         _ENVS_DIR / "auv.xml",
         _REPO_ROOT / "auv.xml",
@@ -58,21 +63,9 @@ def resolve_xml_path() -> Path:
 
 def resolve_run_dir(base: Path, mode: str, run_name: str) -> Path:
     """
-    Find the training run directory.
-    Automatically prefers _v1 suffix (resumed run = more steps = better model).
-
-    Your Drive has these patterns:
-        curriculum_seed0      (original, stopped at 400k)
-        curriculum_seed0_v1   (resumed, ran to 1M — USE THIS)
-        curriculum_seed1      (full run)
-        curriculum_seed2      (full run)
-
-    Search order:
-        1. Exact match if run_name already ends with _v1/_v2
-        2. <run_name>_v1  (resumed — prefer, more steps)
-        3. <run_name>      (original)
+    Finds the training run directory, prioritizing '_v1' resumed runs
+    which contain more training steps and better performance.
     """
-    # Exact match if suffix already provided
     has_suffix = any(run_name.endswith(s) for s in ["_v1", "_v2", "_v3"])
     if has_suffix:
         run_dir = base / mode / run_name
@@ -80,7 +73,6 @@ def resolve_run_dir(base: Path, mode: str, run_name: str) -> Path:
             return run_dir
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
 
-    # Try _v1 first (resumed run = more training = better model)
     for suffix in ["_v1", ""]:
         candidate = base / mode / f"{run_name}{suffix}"
         if candidate.exists() and (candidate / "best_model.zip").exists():
@@ -90,7 +82,6 @@ def resolve_run_dir(base: Path, mode: str, run_name: str) -> Path:
                 )
             return candidate
 
-    # Not found — list what is available
     mode_dir = base / mode
     available = []
     if mode_dir.exists():
@@ -115,6 +106,9 @@ def evaluate_sac(
     seed: int = 9999,
     verbose: bool = True,
 ) -> Dict:
+    """
+    Evaluates a trained SAC model, tracking success, reward, energy, and peak thrust.
+    """
     try:
         from stable_baselines3 import SAC
         from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -159,13 +153,14 @@ def evaluate_sac(
         )
 
     episode_rewards, episode_dists = [], []
-    episode_energies, episode_total_energy, episode_lengths = [], [], []
+    episode_energies, episode_lengths, peak_thrusts = [], [], []
     successes = 0
 
     for ep in range(n_episodes):
         obs = vec_env.reset()
         ep_reward = 0.0
-        ep_actions = []
+        ep_energy = 0.0
+        ep_peak = 0.0
         ep_steps = 0
         done = False
         final_dist = float("inf")
@@ -173,23 +168,23 @@ def evaluate_sac(
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, info = vec_env.step(action)
+
+            raw_action = action[0]
+            action_mag = float(np.mean(np.abs(raw_action)))
+
+            ep_energy += action_mag
+            ep_peak = max(ep_peak, float(np.max(np.abs(raw_action))))
             ep_reward += float(reward[0])
-            ep_actions.append(np.abs(action[0]))
             ep_steps += 1
+
             if done[0]:
                 final_dist = info[0].get("goal_dist", float("inf"))
 
         episode_rewards.append(ep_reward)
         episode_dists.append(final_dist)
         episode_lengths.append(ep_steps)
-
-        if ep_actions:
-            arr = np.array(ep_actions)
-            episode_energies.append(float(np.mean(arr)))
-            episode_total_energy.append(float(np.sum(arr)))
-        else:
-            episode_energies.append(0.0)
-            episode_total_energy.append(0.0)
+        episode_energies.append(ep_energy / max(ep_steps, 1))
+        peak_thrusts.append(ep_peak)
 
         if final_dist < 0.5:
             successes += 1
@@ -210,19 +205,12 @@ def evaluate_sac(
         "success_count": int(successes),
         "mean_reward": float(np.mean(episode_rewards)),
         "std_reward": float(np.std(episode_rewards)),
-        "min_reward": float(np.min(episode_rewards)),
-        "max_reward": float(np.max(episode_rewards)),
         "mean_dist": float(np.mean(episode_dists)),
         "std_dist": float(np.std(episode_dists)),
         "mean_energy_per_step": float(np.mean(episode_energies)),
         "std_energy_per_step": float(np.std(episode_energies)),
-        "mean_total_energy": float(np.mean(episode_total_energy)),
-        "std_total_energy": float(np.std(episode_total_energy)),
+        "mean_peak_thrust": float(np.mean(peak_thrusts)),
         "mean_episode_length": float(np.mean(episode_lengths)),
-        "std_episode_length": float(np.std(episode_lengths)),
-        "episode_rewards": episode_rewards,
-        "episode_dists": episode_dists,
-        "episode_energies": episode_energies,
     }
 
 
@@ -233,6 +221,9 @@ def evaluate_pid(
     seed: int = 9999,
     verbose: bool = True,
 ) -> Dict:
+    """
+    Evaluates the standard PID controller baseline, matching SAC metrics.
+    """
     if verbose:
         print(f"\n[eval] Running PID baseline for {n_episodes} episodes...")
 
@@ -248,7 +239,7 @@ def evaluate_pid(
     rng = np.random.default_rng(seed)
 
     episode_rewards, episode_dists = [], []
-    episode_energies, episode_total_energy, episode_lengths = [], [], []
+    episode_energies, episode_lengths, peak_thrusts = [], [], []
     successes = 0
 
     for ep in range(n_episodes):
@@ -261,7 +252,10 @@ def evaluate_pid(
 
         integral = np.zeros(3)
         prev_error = np.zeros(3)
-        ep_reward, ep_actions, ep_steps = 0.0, [], 0
+        ep_reward = 0.0
+        ep_energy = 0.0
+        ep_peak = 0.0
+        ep_steps = 0
         ep_success = False
 
         for step in range(MAX_STEPS):
@@ -293,11 +287,15 @@ def evaluate_pid(
                 1.0,
             )
 
+            action_mag = float(np.mean(np.abs(action)))
+            ep_energy += action_mag
+            ep_peak = max(ep_peak, float(np.max(np.abs(action))))
+
             prev_error = error.copy()
             obs, reward, terminated, truncated, info = wrapper.step(action)
             ep_reward += float(reward)
-            ep_actions.append(np.abs(action))
             ep_steps += 1
+
             if terminated or truncated:
                 if info.get("goal_dist", dist) < GOAL_THRESHOLD:
                     ep_success = True
@@ -310,14 +308,8 @@ def evaluate_pid(
         episode_rewards.append(ep_reward)
         episode_dists.append(final_dist)
         episode_lengths.append(ep_steps)
-
-        if ep_actions:
-            arr = np.array(ep_actions)
-            episode_energies.append(float(np.mean(arr)))
-            episode_total_energy.append(float(np.sum(arr)))
-        else:
-            episode_energies.append(0.0)
-            episode_total_energy.append(0.0)
+        episode_energies.append(ep_energy / max(ep_steps, 1))
+        peak_thrusts.append(ep_peak)
 
         wrapper.close()
 
@@ -334,23 +326,17 @@ def evaluate_pid(
         "success_count": int(successes),
         "mean_reward": float(np.mean(episode_rewards)),
         "std_reward": float(np.std(episode_rewards)),
-        "min_reward": float(np.min(episode_rewards)),
-        "max_reward": float(np.max(episode_rewards)),
         "mean_dist": float(np.mean(episode_dists)),
         "std_dist": float(np.std(episode_dists)),
         "mean_energy_per_step": float(np.mean(episode_energies)),
         "std_energy_per_step": float(np.std(episode_energies)),
-        "mean_total_energy": float(np.mean(episode_total_energy)),
-        "std_total_energy": float(np.std(episode_total_energy)),
+        "mean_peak_thrust": float(np.mean(peak_thrusts)),
         "mean_episode_length": float(np.mean(episode_lengths)),
-        "std_episode_length": float(np.std(episode_lengths)),
-        "episode_rewards": episode_rewards,
-        "episode_dists": episode_dists,
-        "episode_energies": episode_energies,
     }
 
 
 def print_results(results: Dict):
+    """Prints a cleanly formatted breakdown of an individual evaluation run."""
     mode = results["mode"].upper()
     seed = results.get("seed", "-")
     label = f"{mode} seed={seed}" if seed != "-" else mode
@@ -367,28 +353,26 @@ def print_results(results: Dict):
         f"  Energy/step:  {results['mean_energy_per_step']:.4f} ± "
         f"{results['std_energy_per_step']:.4f}"
     )
+    print(f"  Peak thrust:  {results['mean_peak_thrust']:.4f}")
     print(f"  Episode len:  {results['mean_episode_length']:.1f} steps")
     print(f"{'=' * 55}")
 
 
 def save_results(results: Dict, save_path: Path):
-    save_data = {
-        k: v
-        for k, v in results.items()
-        if k not in ["episode_rewards", "episode_dists", "episode_energies"]
-    }
+    """Saves evaluation metrics to JSON for visualization scripts."""
     with open(save_path, "w") as f:
-        json.dump(save_data, f, indent=2)
+        json.dump(results, f, indent=2)
     print(f"\n[eval] Saved → {save_path}")
 
 
 def print_summary_table(all_results: List[Dict]):
-    print(f"\n{'=' * 75}")
+    """Prints an aggregated table of all models tested in the current batch."""
+    print(f"\n{'=' * 85}")
     print(f"  COMPLETE RESULTS SUMMARY")
     print(
-        f"  {'Condition':<22} {'Success':>8} {'Reward':>12} {'Dist':>8} {'Energy/step':>12}"
+        f"  {'Condition':<22} {'Success':>8} {'Reward':>12} {'Dist':>8} {'Energy/step':>12} {'Peak Thrust':>12}"
     )
-    print(f"  {'-' * 22} {'-' * 8} {'-' * 12} {'-' * 8} {'-' * 12}")
+    print(f"  {'-' * 22} {'-' * 8} {'-' * 12} {'-' * 8} {'-' * 12} {'-' * 12}")
     for r in all_results:
         label = f"{r['mode']} s{r.get('seed', '-')}"
         print(
@@ -396,7 +380,8 @@ def print_summary_table(all_results: List[Dict]):
             f"{r['success_rate'] * 100:>7.1f}% "
             f"{r['mean_reward']:>7.2f}±{r['std_reward']:<6.2f} "
             f"{r['mean_dist']:>5.2f}m "
-            f"{r['mean_energy_per_step']:>8.4f}"
+            f"{r['mean_energy_per_step']:>8.4f} "
+            f"{r['mean_peak_thrust']:>11.4f}"
         )
 
     print(f"\n  MEAN ± STD ACROSS SEEDS:")
@@ -407,13 +392,15 @@ def print_summary_table(all_results: List[Dict]):
         sr = [r["success_rate"] * 100 for r in mrs]
         rw = [r["mean_reward"] for r in mrs]
         en = [r["mean_energy_per_step"] for r in mrs]
+        pt = [r["mean_peak_thrust"] for r in mrs]
         print(
             f"  {mode:<15} "
             f"{np.mean(sr):>6.1f}±{np.std(sr):<5.1f}% "
             f"{np.mean(rw):>7.2f}±{np.std(rw):<7.2f} "
-            f"{np.mean(en):>7.4f}±{np.std(en):.4f}"
+            f"{np.mean(en):>7.4f}±{np.std(en):.4f} "
+            f"{np.mean(pt):>9.4f}±{np.std(pt):.4f}"
         )
-    print(f"{'=' * 75}\n")
+    print(f"{'=' * 85}\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -505,17 +492,9 @@ def main():
 
     if len(all_results) > 1:
         print_summary_table(all_results)
-        summary = [
-            {
-                k: v
-                for k, v in r.items()
-                if k not in ["episode_rewards", "episode_dists", "episode_energies"]
-            }
-            for r in all_results
-        ]
         out = base_dir / "eval_summary.json"
         with open(out, "w") as f:
-            json.dump(summary, f, indent=2)
+            json.dump(all_results, f, indent=2)
         print(f"[eval] Summary saved → {out}")
 
 
