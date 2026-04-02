@@ -107,7 +107,7 @@ def evaluate_perturbation(args: argparse.Namespace):
     vec_env.norm_reward = False
 
     model = SAC.load(str(run_dir / "best_model"), env=vec_env)
-    base_env = vec_env.venv.envs[0].env.env
+    base_env = vec_env.venv.envs[0].unwrapped
 
     label = f"TRACKING {args.mode}" if args.is_tracking else f"STATIC {args.mode}"
     print(
