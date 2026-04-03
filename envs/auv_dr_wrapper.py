@@ -1,36 +1,11 @@
 """
 auv_dr_wrapper.py — AUVDomainRandomWrapper
-════════════════════════════════════════════════════════════════════════════════
-
+================================================================================
 Domain Randomisation wrapper for HalcyonAUVEnv.
-Implements three experimental conditions:
+Supports hierarchical stacking (e.g., Tracking -> Obstacles -> DR).
 
-  mode="none"       → No DR. Nominal physics every episode.
-                      Paper label: "Naive SAC" (baseline 1)
-
-  mode="uniform"    → Uniform DR. Physics sampled uniformly from
-                      full training ranges each episode reset.
-                      Paper label: "Uniform DR" (baseline 2)
-
-  mode="curriculum" → Curriculum DR (CDR). Ranges start narrow and
-                      expand automatically as agent improves, based
-                      on a rolling success rate window.
-                      Paper label: "CDR (ours)"
-
-Architecture:
-    AUVDomainRandomWrapper
-        └── wraps HalcyonAUVEnv (gymnasium.Wrapper)
-                └── wraps auv.xml (MuJoCo)
-
-Fixes vs original:
-  - _apply_dr() now checks _test_mode → set_test_distribution() works
-  - _expand_ranges() / _contract_ranges() clamp with np.clip → no FP drift
-  - _apply_nominal() returns act_efficiency → no missing key in logs
-  - CDRLoggingCallback logs mode + n_episodes for TensorBoard phase plots
-  - Validation __main__ runs all modes + checkpoint + speed test
-
-Install:
-    pip install "gymnasium[mujoco]" "stable-baselines3[extra]" mujoco numpy
+This version restores all factory functions and logging callbacks required
+by train.py and train_master.py.
 """
 
 from __future__ import annotations
@@ -50,24 +25,6 @@ from auv_env import HalcyonAUVEnv
 # ══════════════════════════════════════════════════════════════════════════════
 # Physics parameter configuration
 # ══════════════════════════════════════════════════════════════════════════════
-#
-# Each entry: (min_lo, start_lo, start_hi, max_hi)
-#   min_lo   = minimum lower bound (CDR contracts toward this)
-#   start_lo = initial lower bound for CDR (easy start)
-#   start_hi = initial upper bound for CDR (easy start)
-#   max_hi   = maximum upper bound (CDR expands toward this)
-#
-# Uniform DR always samples from [min_lo, max_hi].
-# CDR starts at [start_lo, start_hi] and expands both bounds.
-#
-# Paper Table 1 reference:
-#                    Nominal   Train start     Train max       Test (held-out)
-#   c_drag_lateral:  0.20      [0.15, 0.25]    [0.10, 0.50]   [0.30, 0.80]
-#   c_drag_axial:    0.08      [0.06, 0.10]    [0.04, 0.20]   [0.12, 0.32]
-#   buoyancy_offset: 0.02      [-0.01, 0.05]   [-0.05, 0.10]  [-0.10, 0.15]
-#   current_speed:   0.00      [0.00, 0.10]    [0.00, 0.30]   [0.20, 0.60]
-#   added_mass:      0.15      [0.10, 0.20]    [0.05, 0.30]   [0.20, 0.50]
-#   act_efficiency:  1.00      [0.95, 1.00]    [0.80, 1.00]   [0.70, 1.00]
 
 PARAM_CONFIG: Dict[str, Dict[str, float]] = {
     "c_drag_lateral": dict(min_lo=0.10, start_lo=0.15, start_hi=0.25, max_hi=0.50),
@@ -76,14 +33,12 @@ PARAM_CONFIG: Dict[str, Dict[str, float]] = {
     "current_speed": dict(min_lo=0.00, start_lo=0.00, start_hi=0.10, max_hi=0.30),
     "added_mass": dict(min_lo=0.05, start_lo=0.10, start_hi=0.20, max_hi=0.30),
     "act_efficiency": dict(min_lo=0.80, start_lo=0.95, start_hi=1.00, max_hi=1.00),
-    # Sensor noise parameters (NEW)
+    # Sensor noise parameters (Phase 1)
     "pos_noise_std": dict(min_lo=0.00, start_lo=0.00, start_hi=0.02, max_hi=0.10),
     "vel_noise_std": dict(min_lo=0.00, start_lo=0.00, start_hi=0.01, max_hi=0.05),
     "ang_noise_std": dict(min_lo=0.00, start_lo=0.00, start_hi=0.005, max_hi=0.02),
 }
 
-# Held-out test distribution — NEVER seen during training.
-# Transfer success on these ranges = main paper result.
 TEST_PARAM_CONFIG: Dict[str, Tuple[float, float]] = {
     "c_drag_lateral": (0.30, 0.80),
     "c_drag_axial": (0.12, 0.32),
@@ -91,23 +46,16 @@ TEST_PARAM_CONFIG: Dict[str, Tuple[float, float]] = {
     "current_speed": (0.20, 0.60),
     "added_mass": (0.20, 0.50),
     "act_efficiency": (0.70, 1.00),
-    "pos_noise_std": (0.05, 0.15),  # stronger noise in test
+    "pos_noise_std": (0.05, 0.15),
     "vel_noise_std": (0.02, 0.08),
     "ang_noise_std": (0.01, 0.04),
 }
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Curriculum hyperparameters
-# ══════════════════════════════════════════════════════════════════════════════
-
-CDR_WINDOW_SIZE = 20  # rolling window for success rate
-CDR_EXPAND_THRESHOLD = 0.40  # success rate above this → expand ranges
-CDR_CONTRACT_THRESHOLD = 0.20  # success rate below this → contract ranges
-CDR_EXPAND_STEP = 0.05  # fraction of full range to expand per trigger
-CDR_CONTRACT_STEP = 0.03  # fraction of full range to contract per trigger
-CDR_MIN_EPISODES = CDR_WINDOW_SIZE  # warm-up before curriculum adjusts
-
+CDR_WINDOW_SIZE = 20
+CDR_EXPAND_THRESHOLD = 0.40
+CDR_CONTRACT_THRESHOLD = 0.20
+CDR_EXPAND_STEP = 0.05
+CDR_CONTRACT_STEP = 0.03
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Main Wrapper
@@ -117,34 +65,14 @@ CDR_MIN_EPISODES = CDR_WINDOW_SIZE  # warm-up before curriculum adjusts
 class AUVDomainRandomWrapper(Wrapper):
     """
     Domain Randomisation wrapper for HalcyonAUVEnv.
-
-    Parameters
-    ----------
-    env : HalcyonAUVEnv
-        Base environment to wrap.
-    mode : str
-        One of "none", "uniform", "curriculum".
-    seed : int | None
-        RNG seed for reproducibility.
-    cdr_window_size : int
-        Rolling success rate window length.
-    cdr_expand_threshold : float
-        Expand ranges when success rate exceeds this.
-    cdr_contract_threshold : float
-        Contract ranges when success rate drops below this.
-    cdr_expand_step : float
-        Fraction of full range to expand per trigger.
-    cdr_contract_step : float
-        Fraction of full range to contract per trigger.
-    verbose : bool
-        Print curriculum updates to stdout.
+    Supports 'none', 'uniform', and 'curriculum' modes.
     """
 
     VALID_MODES = ("none", "uniform", "curriculum")
 
     def __init__(
         self,
-        env: HalcyonAUVEnv,
+        env: gym.Env,
         mode: str = "curriculum",
         seed: Optional[int] = None,
         cdr_window_size: int = CDR_WINDOW_SIZE,
@@ -163,328 +91,194 @@ class AUVDomainRandomWrapper(Wrapper):
         self.verbose = verbose
         self.rng = np.random.default_rng(seed)
 
-        # ── CDR hyperparameters ───────────────────────────────────────────────
         self._cdr_window_size = cdr_window_size
         self._cdr_expand_threshold = cdr_expand_threshold
         self._cdr_contract_threshold = cdr_contract_threshold
         self._cdr_expand_step = cdr_expand_step
         self._cdr_contract_step = cdr_contract_step
 
-        # Rolling window: True=success, False=failure
         self._outcome_window: Deque[bool] = deque(maxlen=cdr_window_size)
-
-        # Current CDR ranges — start narrow, expand as agent improves
         self._cdr_ranges: Dict[str, List[float]] = {
             k: [v["start_lo"], v["start_hi"]] for k, v in PARAM_CONFIG.items()
         }
 
-        # Scalar ∈ [0, 1]: how far the curriculum has expanded
-        # 0.0 = start (easy), 1.0 = maximum training difficulty
         self._curriculum_level: float = 0.0
-
-        # ── Episode tracking ──────────────────────────────────────────────────
         self._n_episodes: int = 0
         self._n_successes: int = 0
         self._last_episode_was_success: bool = False
         self._last_dr_params: Dict[str, float] = {}
-
-        # Used to detect episode end inside step()
-        self._episode_terminated = False
-        self._episode_truncated = False
-
-        # Set to True by set_test_distribution() — switches sampling
-        # to the held-out test config (wider than training max)
         self._test_mode: bool = False
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Gymnasium API
-    # ─────────────────────────────────────────────────────────────────────────
-
     def reset(
-        self,
-        seed: Optional[int] = None,
-        options: Optional[Dict[str, Any]] = None,
+        self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
     ) -> Tuple[np.ndarray, Dict]:
-        """
-        Reset the environment and apply DR for the new episode.
-        CDR curriculum update happens here, using the previous episode outcome.
-        """
-        # Update curriculum from previous episode (skip on first episode)
         if self._n_episodes > 0:
             self._record_episode_outcome()
             if self.mode == "curriculum":
                 self._maybe_update_curriculum()
 
-        # Sample and apply physics for the new episode
         self._last_dr_params = self._apply_dr()
         self._n_episodes += 1
-        self._episode_terminated = False
-        self._episode_truncated = False
-
         obs, info = self.env.reset(seed=seed, options=options)
         info.update(self._dr_info())
         return obs, info
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """
-        Pass-through step. Tracks episode outcome for curriculum update.
-        """
         obs, reward, terminated, truncated, info = self.env.step(action)
 
         if terminated or truncated:
-            self._episode_terminated = terminated
-            self._episode_truncated = truncated
             goal_dist = info.get("goal_dist", float("inf"))
-
-            # FIX: Use info["is_success"] if provided (Tracking Env),
-            # otherwise fallback to unwrapped base env logic (Obstacle Env).
+            # Prioritize 'is_success' from tracking/obstacle wrappers
             self._last_episode_was_success = info.get(
                 "is_success",
                 terminated and goal_dist < self.env.unwrapped.goal_threshold,
             )
+            # Catastrophic failure if collision occurred
+            if info.get("collision", False):
+                self._last_episode_was_success = False
 
         info.update(self._dr_info())
         return obs, reward, terminated, truncated, info
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # DR application
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _apply_dr(self) -> Dict[str, float]:
-        """
-        Route to correct DR method based on mode and _test_mode flag.
-        """
         if self._test_mode:
-            return self._apply_test()
+            return self._sample_and_apply(TEST_PARAM_CONFIG)
         if self.mode == "none":
             return self._apply_nominal()
         if self.mode == "uniform":
-            return self._apply_uniform()
+            ranges = {k: (v["min_lo"], v["max_hi"]) for k, v in PARAM_CONFIG.items()}
+            return self._sample_and_apply(ranges)
         if self.mode == "curriculum":
-            return self._apply_curriculum()
+            ranges = {k: (lo, hi) for k, (lo, hi) in self._cdr_ranges.items()}
+            return self._sample_and_apply(ranges)
         return {}
 
     def _apply_nominal(self) -> Dict[str, float]:
-        """
-        Mode 'none': leave physics at DEFAULT_PHYSICS, return current values.
-        """
+        """Reach down to core physics and return nominal values."""
+        core = self.env.unwrapped
+        p = core.physics_params
         return {
-            "c_drag_lateral": self.env.physics_params["c_drag_lateral"],
-            "c_drag_axial": self.env.physics_params["c_drag_axial"],
-            "buoyancy": self.env.physics_params["buoyancy_offset"],
-            "current_speed": float(
-                np.linalg.norm(self.env.physics_params["current_velocity"])
-            ),
-            "added_mass": self.env.physics_params["added_mass_coeff"],
-            "act_efficiency": float(
-                np.mean(self.env.physics_params["actuator_efficiency"])
-            ),
+            "c_drag_lateral": p["c_drag_lateral"],
+            "c_drag_axial": p["c_drag_axial"],
+            "buoyancy": p["buoyancy_offset"],
+            "current_speed": float(np.linalg.norm(p["current_velocity"])),
+            "added_mass": p["added_mass_coeff"],
+            "act_efficiency": float(np.mean(p["actuator_efficiency"])),
         }
-
-    def _apply_uniform(self) -> Dict[str, float]:
-        """
-        Mode 'uniform': sample uniformly from full training ranges [min_lo, max_hi].
-        """
-        ranges = {k: (v["min_lo"], v["max_hi"]) for k, v in PARAM_CONFIG.items()}
-        return self._sample_and_apply(ranges)
-
-    def _apply_curriculum(self) -> Dict[str, float]:
-        """
-        Mode 'curriculum': sample from current CDR ranges [lo, hi].
-        """
-        ranges = {k: (lo, hi) for k, (lo, hi) in self._cdr_ranges.items()}
-        return self._sample_and_apply(ranges)
-
-    def _apply_test(self) -> Dict[str, float]:
-        """
-        Sample from held-out test distribution.
-        """
-        return self._sample_and_apply(TEST_PARAM_CONFIG)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Sampling helper
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _sample_and_apply(
         self, ranges: Dict[str, Tuple[float, float]]
     ) -> Dict[str, float]:
-        """
-        Sample physics parameters from given ranges and apply to base env.
-        """
+        """Sample physics parameters and apply to the .unwrapped core environment."""
         r = self.rng
+        core = self.env.unwrapped
+        p = core.physics_params
 
-        # ── Drag ─────────────────────────────────────────────────────────────
+        # -- Drag --
         c_dl = float(r.uniform(*ranges["c_drag_lateral"]))
         c_da = float(r.uniform(*ranges["c_drag_axial"]))
-        self.env.physics_params["c_drag_lateral"] = c_dl
-        self.env.physics_params["c_drag_axial"] = c_da
+        p["c_drag_lateral"] = c_dl
+        p["c_drag_axial"] = c_da
 
-        # ── Buoyancy ──────────────────────────────────────────────────────────
+        # -- Buoyancy --
         buoy = float(r.uniform(*ranges["buoyancy_offset"]))
-        self.env.physics_params["buoyancy_offset"] = buoy
+        p["buoyancy_offset"] = buoy
 
-        # ── Water current (random speed + random direction) ───────────────────
+        # -- Water current --
         speed = float(r.uniform(*ranges["current_speed"]))
         direction = r.standard_normal(3)
         direction /= np.linalg.norm(direction) + 1e-8
-        self.env.physics_params["current_velocity"] = (direction * speed).astype(
-            np.float32
-        )
+        p["current_velocity"] = (direction * speed).astype(np.float32)
 
-        # ── Added mass ────────────────────────────────────────────────────────
-        am = float(r.uniform(*ranges["added_mass"]))
-        self.env.physics_params["added_mass_coeff"] = am
+        # -- Added mass --
+        p["added_mass_coeff"] = float(r.uniform(*ranges["added_mass"]))
 
-        # ── Actuator efficiency (per-thruster) ────────────────────────────────
+        # -- Actuator efficiency --
         eff_lo, eff_hi = ranges["act_efficiency"]
         eff = r.uniform(eff_lo, eff_hi, size=4).astype(np.float32)
-        self.env.physics_params["actuator_efficiency"] = eff
+        p["actuator_efficiency"] = eff
 
-        # Sensor noise
-        if "pos_noise_std" in ranges:
-            self.env.physics_params["pos_noise_std"] = float(
-                r.uniform(*ranges["pos_noise_std"])
-            )
-        if "vel_noise_std" in ranges:
-            self.env.physics_params["vel_noise_std"] = float(
-                r.uniform(*ranges["vel_noise_std"])
-            )
-        if "ang_noise_std" in ranges:
-            self.env.physics_params["ang_noise_std"] = float(
-                r.uniform(*ranges["ang_noise_std"])
-            )
+        # -- Sensor noise (Phase 1) --
+        for key in ["pos_noise_std", "vel_noise_std", "ang_noise_std"]:
+            if key in ranges:
+                p[key] = float(r.uniform(*ranges[key]))
 
         return {
             "c_drag_lateral": c_dl,
             "c_drag_axial": c_da,
             "buoyancy": buoy,
             "current_speed": speed,
-            "added_mass": am,
+            "added_mass": p["added_mass_coeff"],
             "act_efficiency": float(np.mean(eff)),
-            "pos_noise": self.env.physics_params.get("pos_noise_std", 0.0),
-            "vel_noise": self.env.physics_params.get("vel_noise_std", 0.0),
+            "pos_noise": p.get("pos_noise_std", 0.0),
+            "vel_noise": p.get("vel_noise_std", 0.0),
         }
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Curriculum logic
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _record_episode_outcome(self):
-        success = self._last_episode_was_success
-        self._outcome_window.append(success)
-        if success:
+        self._outcome_window.append(self._last_episode_was_success)
+        if self._last_episode_was_success:
             self._n_successes += 1
 
     def _maybe_update_curriculum(self):
         if len(self._outcome_window) < self._cdr_window_size:
             return
+        sr = sum(self._outcome_window) / len(self._outcome_window)
 
-        success_rate = sum(self._outcome_window) / len(self._outcome_window)
-
-        if success_rate > self._cdr_expand_threshold:
-            self._expand_ranges()
+        if sr > self._cdr_expand_threshold:
+            self._adjust_ranges(self._cdr_expand_step, expand=True)
             if self.verbose:
-                print(
-                    f"[CDR] ep={self._n_episodes:5d} | "
-                    f"success={success_rate:.2f} > {self._cdr_expand_threshold:.2f} "
-                    f"→ EXPAND  | level={self._curriculum_level:.3f}"
-                )
-        elif success_rate < self._cdr_contract_threshold:
-            self._contract_ranges()
+                print(f"[CDR] ep={self._n_episodes:5d} | SR={sr:.2f} | EXPAND")
+        elif sr < self._cdr_contract_threshold:
+            self._adjust_ranges(self._cdr_contract_step, expand=False)
             if self.verbose:
-                print(
-                    f"[CDR] ep={self._n_episodes:5d} | "
-                    f"success={success_rate:.2f} < {self._cdr_contract_threshold:.2f} "
-                    f"→ CONTRACT | level={self._curriculum_level:.3f}"
-                )
+                print(f"[CDR] ep={self._n_episodes:5d} | SR={sr:.2f} | CONTRACT")
 
         self._curriculum_level = self._compute_curriculum_level()
 
-    def _expand_ranges(self):
+    def _adjust_ranges(self, step_fraction: float, expand: bool):
         for k, cfg in PARAM_CONFIG.items():
-            full_lo = cfg["start_lo"] - cfg["min_lo"]
-            full_hi = cfg["max_hi"] - cfg["start_hi"]
-            step_lo = self._cdr_expand_step * full_lo
-            step_hi = self._cdr_expand_step * full_hi
-
+            f_lo = cfg["start_lo"] - cfg["min_lo"]
+            f_hi = cfg["max_hi"] - cfg["start_hi"]
             lo, hi = self._cdr_ranges[k]
-            lo = lo - step_lo
-            hi = hi + step_hi
 
-            lo = np.clip(lo, cfg["min_lo"], cfg["start_lo"])
-            hi = np.clip(hi, cfg["start_hi"], cfg["max_hi"])
+            if expand:
+                lo, hi = lo - step_fraction * f_lo, hi + step_fraction * f_hi
+            else:
+                lo, hi = lo + step_fraction * f_lo, hi - step_fraction * f_hi
 
-            self._cdr_ranges[k] = [float(lo), float(hi)]
-
-    def _contract_ranges(self):
-        for k, cfg in PARAM_CONFIG.items():
-            full_lo = cfg["start_lo"] - cfg["min_lo"]
-            full_hi = cfg["max_hi"] - cfg["start_hi"]
-            step_lo = self._cdr_contract_step * full_lo
-            step_hi = self._cdr_contract_step * full_hi
-
-            lo, hi = self._cdr_ranges[k]
-            lo = lo + step_lo
-            hi = hi - step_hi
-
-            lo = np.clip(lo, cfg["min_lo"], cfg["start_lo"])
-            hi = np.clip(hi, cfg["start_hi"], cfg["max_hi"])
-
-            self._cdr_ranges[k] = [float(lo), float(hi)]
+            self._cdr_ranges[k] = [
+                float(np.clip(lo, cfg["min_lo"], cfg["start_lo"])),
+                float(np.clip(hi, cfg["start_hi"], cfg["max_hi"])),
+            ]
 
     def _compute_curriculum_level(self) -> float:
         levels = []
         for k, cfg in PARAM_CONFIG.items():
             lo, hi = self._cdr_ranges[k]
-
-            lo_range = cfg["start_lo"] - cfg["min_lo"]
-            hi_range = cfg["max_hi"] - cfg["start_hi"]
-
-            lo_prog = (cfg["start_lo"] - lo) / (lo_range + 1e-8)
-            hi_prog = (hi - cfg["start_hi"]) / (hi_range + 1e-8)
-
-            levels.append(float(np.clip((lo_prog + hi_prog) / 2.0, 0.0, 1.0)))
-
+            lo_p = (cfg["start_lo"] - lo) / (cfg["start_lo"] - cfg["min_lo"] + 1e-8)
+            hi_p = (hi - cfg["start_hi"]) / (cfg["max_hi"] - cfg["start_hi"] + 1e-8)
+            levels.append(np.clip((lo_p + hi_p) / 2.0, 0.0, 1.0))
         return float(np.mean(levels))
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Info / TensorBoard logging
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _dr_info(self) -> Dict[str, Any]:
-        info: Dict[str, Any] = {
-            "dr/mode": self.mode,
-            "dr/n_episodes": self._n_episodes,
-        }
+        info = {"dr/mode": self.mode, "dr/n_episodes": self._n_episodes}
         info.update({f"dr/{k}": v for k, v in self._last_dr_params.items()})
-
         if self.mode == "curriculum":
             sr = (
                 sum(self._outcome_window) / len(self._outcome_window)
                 if self._outcome_window
                 else 0.0
             )
-            info["dr/curriculum_level"] = self._curriculum_level
-            info["dr/success_rate"] = sr
-            for k, (lo, hi) in self._cdr_ranges.items():
-                info[f"dr/range_{k}_lo"] = lo
-                info[f"dr/range_{k}_hi"] = hi
-
+            info.update(
+                {"dr/curriculum_level": self._curriculum_level, "dr/success_rate": sr}
+            )
         return info
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Evaluation helpers
-    # ─────────────────────────────────────────────────────────────────────────
 
     def set_test_distribution(self):
         self._test_mode = True
 
     def unset_test_distribution(self):
         self._test_mode = False
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Properties
-    # ─────────────────────────────────────────────────────────────────────────
 
     @property
     def curriculum_level(self) -> float:
@@ -496,102 +290,53 @@ class AUVDomainRandomWrapper(Wrapper):
             return 0.0
         return sum(self._outcome_window) / len(self._outcome_window)
 
-    @property
-    def n_episodes(self) -> int:
-        return self._n_episodes
-
-    @property
-    def n_successes(self) -> int:
-        return self._n_successes
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # CDR checkpoint / restore
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def get_cdr_state(self) -> Dict:
-        return {
-            "mode": self.mode,
-            "n_episodes": self._n_episodes,
-            "n_successes": self._n_successes,
-            "curriculum_level": self._curriculum_level,
-            "cdr_ranges": {k: list(v) for k, v in self._cdr_ranges.items()},
-            "outcome_window": list(self._outcome_window),
-        }
-
-    def load_cdr_state(self, state: Dict):
-        self._n_episodes = state["n_episodes"]
-        self._n_successes = state["n_successes"]
-        self._curriculum_level = state["curriculum_level"]
-        self._cdr_ranges = {k: list(v) for k, v in state["cdr_ranges"].items()}
-        self._outcome_window = deque(
-            state["outcome_window"], maxlen=self._cdr_window_size
-        )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SB3 callbacks
+# SB3 Callbacks & Factory Functions (Restored)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 def make_training_callbacks(
     eval_env,
     log_dir: str,
-    eval_freq: int = 10_000,
+    eval_freq: int = 10000,
     n_eval_episodes: int = 20,
     save_path: Optional[str] = None,
 ):
-    try:
-        from stable_baselines3.common.callbacks import (
-            BaseCallback,
-            CallbackList,
-            CheckpointCallback,
-            EvalCallback,
-        )
-    except ImportError:
-        raise ImportError(
-            "stable-baselines3 required. pip install 'stable-baselines3[extra]'"
-        )
+    from stable_baselines3.common.callbacks import (
+        BaseCallback,
+        CallbackList,
+        CheckpointCallback,
+        EvalCallback,
+    )
 
     class CDRLoggingCallback(BaseCallback):
         _MODE_MAP = {"none": 0, "uniform": 1, "curriculum": 2}
 
-        def __init__(self, verbose: int = 0):
-            super().__init__(verbose)
-
         def _on_step(self) -> bool:
-            infos = self.locals.get("infos", [{}])
-            for info in infos:
-                # CDR-specific
-                if "dr/curriculum_level" in info:
-                    self.logger.record(
-                        "cdr/curriculum_level", info["dr/curriculum_level"]
-                    )
-                if "dr/success_rate" in info:
-                    self.logger.record("cdr/rolling_success", info["dr/success_rate"])
-                if "dr/current_speed" in info:
-                    self.logger.record("cdr/current_speed", info["dr/current_speed"])
-                if "dr/c_drag_lateral" in info:
-                    self.logger.record("cdr/c_drag_lateral", info["dr/c_drag_lateral"])
+            for info in self.locals.get("infos", [{}]):
+                for k in [
+                    "curriculum_level",
+                    "success_rate",
+                    "current_speed",
+                    "c_drag_lateral",
+                    "n_episodes",
+                ]:
+                    if f"dr/{k}" in info:
+                        self.logger.record(f"cdr/{k}", info[f"dr/{k}"])
                 if "dr/mode" in info:
                     self.logger.record(
                         "cdr/mode", self._MODE_MAP.get(info["dr/mode"], -1)
                     )
-                if "dr/n_episodes" in info:
-                    self.logger.record("cdr/n_episodes", info["dr/n_episodes"])
-                # Environment
                 if "goal_dist" in info:
                     self.logger.record("env/goal_dist", info["goal_dist"])
             return True
 
     callbacks = [CDRLoggingCallback()]
-
     if save_path:
         callbacks.append(
             CheckpointCallback(
-                save_freq=50_000,
-                save_path=save_path,
-                name_prefix="auv_model",
-                verbose=1,
+                save_freq=50000, save_path=save_path, name_prefix="auv_model"
             )
         )
 
@@ -603,81 +348,15 @@ def make_training_callbacks(
             eval_freq=eval_freq,
             n_eval_episodes=n_eval_episodes,
             deterministic=True,
-            render=False,
-            verbose=1,
         )
     )
-
     return CallbackList(callbacks)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Convenience factory
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def make_auv_env(
-    xml_path: str,
-    mode: str = "curriculum",
-    seed: Optional[int] = None,
-    render_mode: Optional[str] = None,
-) -> AUVDomainRandomWrapper:
-    base = HalcyonAUVEnv(xml_path=xml_path, render_mode=render_mode)
+def make_auv_env(xml_path: str, mode: str = "curriculum", seed: Optional[int] = None):
+    """Original factory for static goal task."""
+    base = HalcyonAUVEnv(xml_path=xml_path)
     return AUVDomainRandomWrapper(base, mode=mode, seed=seed)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Validation
-# ══════════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    import sys
-
-    print("=" * 60)
-    print("AUVDomainRandomWrapper — sanity check")
-    print("=" * 60)
-
-    candidates = [
-        Path(__file__).parent / "auv.xml",
-        Path("~/rl_robotics/envs/auv.xml").expanduser(),
-        Path("auv.xml"),
-    ]
-    xml_path = next((p for p in candidates if p.exists()), None)
-    if xml_path is None:
-        print("ERROR: auv.xml not found.")
-        sys.exit(1)
-    print(f"Using: {xml_path}\n")
-
-    for mode in ("none", "uniform", "curriculum"):
-        print(f"--- mode='{mode}' ---")
-        env = make_auv_env(str(xml_path), mode=mode, seed=0)
-
-        try:
-            from stable_baselines3.common.env_checker import check_env
-
-            check_env(env, warn=True)
-            print("  ✓ SB3 check_env passed")
-        except ImportError:
-            print("  (SB3 not installed — skipping check_env)")
-
-        obs, info = env.reset(seed=0)
-        n_steps = n_resets = 0
-        for _ in range(200):
-            obs, r, t, tr, info = env.step(env.action_space.sample())
-            n_steps += 1
-            if t or tr:
-                obs, info = env.reset()
-                n_resets += 1
-
-        print(f"  Steps: {n_steps} | Resets: {n_resets}")
-        print(f"  DR info keys: {[k for k in info if k.startswith('dr/')]}")
-
-        if mode == "curriculum":
-            print(f"  curriculum_level : {env.curriculum_level:.3f}")
-            print(f"  rolling_success  : {env.rolling_success_rate:.3f}")
-
-        env.close()
-        print()
 
 
 def make_tracking_env(
@@ -686,11 +365,7 @@ def make_tracking_env(
     seed: Optional[int] = None,
     path_speed: float = 0.3,
 ):
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).parent))
-
+    """Factory for figure-8 tracking task."""
     from auv_tracking_env import HalcyonAUVTrackingEnv
 
     base = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=path_speed)
@@ -703,14 +378,23 @@ def make_obstacle_env(
     seed: Optional[int] = None,
     n_obstacles: int = 5,
 ):
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).parent))
-
-    from auv_env import HalcyonAUVEnv
+    """Factory for obstacle avoidance task."""
     from auv_obstacle_env import ObstacleAUVWrapper
 
     base = HalcyonAUVEnv(xml_path=xml_path)
     obs_env = ObstacleAUVWrapper(base, n_obstacles=n_obstacles)
     return AUVDomainRandomWrapper(obs_env, mode=mode, seed=seed)
+
+
+def make_master_env(
+    xml_path: str, mode: str = "curriculum", seed: Optional[int] = None
+):
+    """Factory for the Grand Challenge: Tracking + Obstacles."""
+    from auv_tracking_env import HalcyonAUVTrackingEnv
+    from auv_obstacle_env import ObstacleAUVWrapper
+
+    # FIX: Hardcode 0.3 instead of the undefined path_speed variable
+    base = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=0.3)
+    return AUVDomainRandomWrapper(
+        ObstacleAUVWrapper(base, n_obstacles=5), mode=mode, seed=seed
+    )

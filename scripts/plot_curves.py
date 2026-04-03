@@ -1,102 +1,76 @@
-"""
-plot_curves.py — Plot training curves for CoRL paper
-====================================================
-Generates Figure 2 (training curves) from extracted TensorBoard data.
-
-Usage:
-    python scripts/plot_curves.py
-"""
-
 import json
-import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from scipy.ndimage import uniform_filter1d
+import numpy as np
 from pathlib import Path
+from scipy.ndimage import gaussian_filter1d
 
-# Publication-ready formatting
-mpl.rcParams.update(
+# --- Publication Settings ---
+plt.rcParams.update(
     {
-        "font.size": 11,
         "font.family": "serif",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "figure.dpi": 300,
+        "font.size": 10,
+        "axes.labelsize": 11,
+        "axes.titlesize": 12,
+        "legend.fontsize": 9,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "savefig.dpi": 300,
+        "figure.autolayout": True,
     }
 )
 
-COLORS = {
-    "none": "#E24B4A",  # Red
-    "uniform": "#BA7517",  # Orange/Gold
-    "curriculum": "#1D9E75",  # Green
-}
-LABELS = {
-    "none": "Naive SAC",
-    "uniform": "Uniform DR",
-    "curriculum": "CDR (ours)",
-}
-SMOOTH = 30  # Moving average window size for cleaner lines
+COLORS = {"none": "#D62728", "uniform": "#FF7F0E", "curriculum": "#2CA02C"}
+LABELS = {"none": "Naive SAC", "uniform": "Uniform DR", "curriculum": "CDR (Ours)"}
 
 
-def plot_metric(curves, metric_key, ylabel, out_name, ylim=None):
-    fig, ax = plt.subplots(figsize=(7, 4))
-
-    for mode in ["none", "uniform", "curriculum"]:
-        seeds = curves[metric_key][mode]
-        valid = [s for s in seeds if len(s["values"]) > 0]
-        if not valid:
-            continue
-
-        # Align lengths in case some runs stopped slightly early
-        min_len = min(len(s["values"]) for s in valid)
-        vals = np.array([s["values"][:min_len] for s in valid])
-        steps = np.array(valid[0]["steps"][:min_len])
-
-        mean = uniform_filter1d(np.mean(vals, axis=0), size=SMOOTH)
-
-        # Only plot standard deviation shading if you ran multiple seeds
-        if len(valid) > 1:
-            std = uniform_filter1d(np.std(vals, axis=0), size=SMOOTH)
-            ax.fill_between(
-                steps / 1e6, mean - std, mean + std, alpha=0.15, color=COLORS[mode]
-            )
-
-        ax.plot(
-            steps / 1e6, mean, color=COLORS[mode], label=LABELS[mode], linewidth=2.0
-        )
-
-    ax.set_xlabel("Training steps (×10⁶)", fontweight="bold")
-    ax.set_ylabel(ylabel, fontweight="bold")
-    ax.legend(frameon=False, fontsize=10)
-    ax.set_xlim(0, 1.0)  # Assuming 1M steps
-    if ylim:
-        ax.set_ylim(*ylim)
-    ax.grid(True, linestyle="--", alpha=0.3)
-
-    plt.tight_layout()
-
-    # Save to the base AUV folder
+def plot_final_analysis(task="master"):
     base = Path.home() / "rl_research" / "auv"
-    out_path = base / out_name
-    plt.savefig(out_path, bbox_inches="tight")
-    print(f"Saved figure: {out_path}")
-    plt.close()
+    with open(base / "all_results.json") as f:
+        data = json.load(f)[task]
 
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    metrics = [
+        ("reward", "Mean Reward"),
+        ("success", "Success Rate"),
+        ("curriculum", "CDR Progress"),
+    ]
 
-def main():
-    curves_path = Path.home() / "rl_research" / "auv" / "training_curves.json"
-    if not curves_path.exists():
-        print("Error: training_curves.json not found. Run extract_curves.py first!")
-        return
+    for i, (m_key, title) in enumerate(metrics):
+        ax = axes[i]
+        for mode in ["none", "uniform", "curriculum"]:
+            seeds = data[mode]
+            if not seeds or m_key not in seeds[0]:
+                continue
 
-    with open(curves_path) as f:
-        curves = json.load(f)
+            # Aggregate across seeds
+            min_len = min(len(s[m_key]["values"]) for s in seeds)
+            vals = np.array([s[m_key]["values"][:min_len] for s in seeds])
+            steps = np.array(seeds[0][m_key]["steps"][:min_len]) / 1e6  # Millions
 
-    print("Generating plots...")
-    plot_metric(curves, "env/goal_dist", "Mean Goal Distance (m)", "fig2_goal_dist.pdf")
-    plot_metric(curves, "rollout/ep_rew_mean", "Mean Episode Reward", "fig2_reward.pdf")
-    print("Done! Your paper figures are ready.")
+            mean = gaussian_filter1d(np.mean(vals, axis=0), sigma=2)
+            std = np.std(vals, axis=0) if len(seeds) > 1 else np.zeros_like(mean)
+
+            ax.plot(steps, mean, label=LABELS[mode], color=COLORS[mode], lw=1.5)
+            if len(seeds) > 1:
+                ax.fill_between(
+                    steps,
+                    mean - std,
+                    mean + std,
+                    color=COLORS[mode],
+                    alpha=0.15,
+                    edgecolor="none",
+                )
+
+        ax.set_title(title, fontweight="bold")
+        ax.set_xlabel("Timesteps ($10^6$)")
+        if i == 0:
+            ax.legend(frameon=False)
+        if i == 1:
+            ax.set_ylim(0, 1.05)  # Success rate is 0 to 1
+
+    plt.savefig(base / f"figure2_{task}_results.pdf", bbox_inches="tight")
+    print(f"✅ Created Figure 2 (PDF) for {task} task.")
 
 
 if __name__ == "__main__":
-    main()
+    plot_final_analysis("master")

@@ -1,7 +1,7 @@
 """
 eval_perturbation.py — Mid-episode perturbation recovery evaluation
 ================================================================================
-Applies a sudden impulse force at step T_perturb during each episode.
+Applies a sudden velocity spike at step T_perturb during each episode.
 Supports both standard Goal-Reaching models and Trajectory Tracking models.
 """
 
@@ -37,25 +37,18 @@ except ImportError:
 # Constants for the Perturbation Test
 N_EPISODES = 50
 T_PERTURB = 100  # Apply impulse at exactly step 100
-IMPULSE_N = 40.0  # Impulse force magnitude (N) — 2x max thruster force
-IMPULSE_DUR = 5  # Impulse duration in steps (~0.2 seconds)
+VELOCITY_KICK = 10.0  # Instantaneous velocity surge (m/s)
 
 
-def apply_impulse(
-    env_unwrapped: HalcyonAUVEnv, step_count: int, impulse_active: Dict
-) -> bool:
-    """Injects a force vector into the MuJoCo engine's applied forces tensor."""
-    if T_PERTURB <= step_count < T_PERTURB + IMPULSE_DUR:
-        if step_count == T_PERTURB:
-            direction = np.random.standard_normal(3)
-            direction[2] *= 0.2  # Dampen vertical throw
-            direction /= np.linalg.norm(direction) + 1e-8
-            impulse_active["dir"] = direction
+def apply_impulse(env_unwrapped: HalcyonAUVEnv, step_count: int) -> bool:
+    """Injects a sudden velocity spike directly into the MuJoCo state."""
+    if step_count == T_PERTURB:
+        direction = np.random.standard_normal(3)
+        direction[2] *= 0.1  # Keep the hit almost entirely horizontal
+        direction /= np.linalg.norm(direction) + 1e-8
 
-        d = impulse_active.get("dir", np.array([1.0, 0.0, 0.0]))
-        env_unwrapped.data.xfrc_applied[env_unwrapped._auv_body_id, 0:3] += (
-            d * IMPULSE_N
-        )
+        # Only apply linear velocity (remove the qvel[3:6] rotational kick)
+        env_unwrapped.data.qvel[0:3] += direction * VELOCITY_KICK
         return True
     return False
 
@@ -111,7 +104,7 @@ def evaluate_perturbation(args: argparse.Namespace):
 
     label = f"TRACKING {args.mode}" if args.is_tracking else f"STATIC {args.mode}"
     print(
-        f"\n[perturb] {label} seed={args.seed} | Impulse={IMPULSE_N}N at step {T_PERTURB}\n"
+        f"\n[perturb] {label.upper()} seed={args.seed} | Velocity Kick={VELOCITY_KICK}m/s at step {T_PERTURB}\n"
     )
 
     recovery_steps_list, post_success_list, energy_recovery_list = [], [], []
@@ -121,11 +114,12 @@ def evaluate_perturbation(args: argparse.Namespace):
     ep_energy = 0.0
     pre_perturb_dist = None
     perturbed = recovered = False
-    impulse_active = {}
 
     while ep_count < N_EPISODES:
         action, _ = model.predict(obs, deterministic=True)
-        apply_impulse(base_env, step_count, impulse_active)
+
+        # Inject velocity spike exactly at T_PERTURB
+        apply_impulse(base_env, step_count)
 
         obs, reward, done, info = vec_env.step(action)
         ep_energy += float(np.mean(np.abs(action[0])))
@@ -140,11 +134,13 @@ def evaluate_perturbation(args: argparse.Namespace):
             recovered = False
             recovery_steps = 0
 
-        if perturbed and not recovered and step_count >= T_PERTURB + IMPULSE_DUR:
+        # Start tracking recovery immediately after the hit
+        if perturbed and not recovered and step_count >= T_PERTURB:
             recovery_steps += 1
+
             # Recovery logic: Must get back within 1.0m OR 120% of pre-hit distance
             threshold = max(pre_perturb_dist * 1.2, 1.0)
-            if pre_perturb_dist is not None and current_dist <= threshold:
+            if current_dist <= threshold:
                 recovered = True
 
         if done[0]:
@@ -162,7 +158,6 @@ def evaluate_perturbation(args: argparse.Namespace):
             ep_energy = 0.0
             pre_perturb_dist = None
             perturbed = recovered = False
-            impulse_active = {}
 
             if ep_count % 10 == 0:
                 print(
@@ -177,7 +172,7 @@ def evaluate_perturbation(args: argparse.Namespace):
         "mode": args.mode,
         "seed": args.seed,
         "task": "tracking" if args.is_tracking else "static_goal",
-        "impulse_N": IMPULSE_N,
+        "velocity_kick": VELOCITY_KICK,
         "post_perturbation_success_rate": float(np.mean(post_success_list)),
         "mean_recovery_steps": float(np.mean(recovery_steps_list)),
         "std_recovery_steps": float(np.std(recovery_steps_list)),

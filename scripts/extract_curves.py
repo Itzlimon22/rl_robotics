@@ -1,75 +1,87 @@
 """
-extract_curves.py — Extract training metrics from TensorBoard logs
-==================================================================
-Extracts goal_dist and success rate over training steps for all runs.
-Saves to JSON for matplotlib plotting.
-
-Usage:
-    python scripts/extract_curves.py
+extract_curves.py — TB to JSON Extractor
+================================================================================
+Extracts training metrics from master and static runs.
+Handles nested SB3 log structures (root vs /eval folders).
 """
 
 import json
+import os
 import sys
 from pathlib import Path
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-try:
-    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-except ImportError:
-    print("Please install tensorboard: pip install tensorboard")
-    sys.exit(1)
-
-# Default to the local Mac directory structure we've been using
-BASE = Path.home() / "rl_research" / "auv"
-MODES = ["none", "uniform", "curriculum"]
-# We only used seed 0 for the main tests, but you can add 1 and 2 if you ran multiple seeds
-SEEDS = [0]
-METRICS = ["env/goal_dist", "rollout/ep_rew_mean"]
+# Map TB keys to clean names for your paper
+METRIC_MAP = {
+    "rollout/ep_rew_mean": "reward",
+    "rollout/success_rate": "success",
+    "env/goal_dist": "error",
+    "cdr/curriculum_level": "curriculum",
+    "cdr/success_rate": "rolling_sr",
+}
 
 
-def extract(path: Path, metric: str):
-    ea = EventAccumulator(str(path))
-    ea.Reload()
-    try:
-        events = ea.Scalars(metric)
-        return {
-            "steps": [e.step for e in events],
-            "values": [e.value for e in events],
-        }
-    except KeyError:
-        print(f"  WARNING: Metric '{metric}' not found in {path.parent.name}")
-        return {"steps": [], "values": []}
+def extract_from_dir(log_dir: Path):
+    """Deep search for event files in a directory and extract metrics."""
+    data = {}
+    # Find all event files in the directory and subdirectories
+    event_files = list(log_dir.rglob("events.out.tfevents.*"))
+    if not event_files:
+        return data
+
+    for event_file in event_files:
+        ea = EventAccumulator(str(event_file.parent))
+        ea.Reload()
+        for tb_key, clean_name in METRIC_MAP.items():
+            if tb_key in ea.Tags()["scalars"]:
+                events = ea.Scalars(tb_key)
+                if clean_name not in data:
+                    data[clean_name] = {"steps": [], "values": []}
+                data[clean_name]["steps"].extend([e.step for e in events])
+                data[clean_name]["values"].extend([float(e.value) for e in events])
+
+    # Sort by steps in case files were read out of order
+    for k in data:
+        sort_idx = sorted(
+            range(len(data[k]["steps"])), key=lambda i: data[k]["steps"][i]
+        )
+        data[k]["steps"] = [data[k]["steps"][i] for i in sort_idx]
+        data[k]["values"] = [data[k]["values"][i] for i in sort_idx]
+
+    return data
 
 
 def main():
-    print("Extracting TensorBoard logs...")
-    output = {}
-    for metric in METRICS:
-        output[metric] = {}
-        for mode in MODES:
-            output[metric][mode] = []
-            for seed in SEEDS:
-                # E.g., ~/rl_research/auv/obstacle_curriculum/obstacle_curriculum_seed0/tensorboard/
-                run_dir_name = f"obstacle_{mode}"
-                tb_path = (
-                    BASE / run_dir_name / f"{run_dir_name}_seed{seed}" / "tensorboard"
-                )
+    base = Path.home() / "rl_research" / "auv"
+    results = {
+        "master": {"curriculum": [], "uniform": [], "none": []},
+        "static": {"curriculum": [], "uniform": [], "none": []},
+    }
 
-                # Tensorboard puts the actual data in a subfolder, so we grab the first directory inside
-                if tb_path.exists() and any(tb_path.iterdir()):
-                    actual_tb_log = next(tb_path.iterdir())
-                    data = extract(actual_tb_log, metric)
-                    output[metric][mode].append(data)
-                    print(
-                        f"  {mode} seed{seed}: {len(data['steps'])} points for {metric}"
-                    )
-                else:
-                    print(f"  MISSING OR EMPTY: {tb_path}")
-                    output[metric][mode].append({"steps": [], "values": []})
+    print(f"🔍 Searching in: {base}")
 
-    out_path = BASE / "training_curves.json"
-    with open(out_path, "w") as f:
-        json.dump(output, f)
-    print(f"\nExtraction complete. Saved to → {out_path}")
+    for task in ["master", "static"]:
+        for mode in ["curriculum", "uniform", "none"]:
+            # Pattern: master_curriculum/master_curriculum_seed0
+            mode_folder = base / f"{task}_{mode}"
+            if not mode_folder.exists():
+                continue
+
+            for seed in [0, 1, 2]:
+                run_dir = mode_folder / f"{task}_{mode}_seed{seed}"
+                if not run_dir.exists():
+                    continue
+
+                print(f"  -> Found: {run_dir.name}")
+                # We extract from the whole tree to get rollout + eval data
+                run_data = extract_from_dir(run_dir)
+                if run_data:
+                    results[task][mode].append(run_data)
+
+    out_file = base / "all_results.json"
+    with open(out_file, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\n✅ Extraction complete! Saved to {out_file}")
 
 
 if __name__ == "__main__":
