@@ -61,20 +61,20 @@ def resolve_xml_path() -> Path:
     raise FileNotFoundError("auv.xml not found.")
 
 
-def resolve_run_dir(base: Path, mode: str, run_name: str) -> Path:
+def resolve_run_dir(base: Path, target_mode: str, run_name: str) -> Path:
     """
     Finds the training run directory, prioritizing '_v1' resumed runs
     which contain more training steps and better performance.
     """
     has_suffix = any(run_name.endswith(s) for s in ["_v1", "_v2", "_v3"])
     if has_suffix:
-        run_dir = base / mode / run_name
+        run_dir = base / target_mode / run_name
         if run_dir.exists():
             return run_dir
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
 
     for suffix in ["_v1", ""]:
-        candidate = base / mode / f"{run_name}{suffix}"
+        candidate = base / target_mode / f"{run_name}{suffix}"
         if candidate.exists() and (candidate / "best_model.zip").exists():
             if suffix == "_v1":
                 print(
@@ -82,7 +82,7 @@ def resolve_run_dir(base: Path, mode: str, run_name: str) -> Path:
                 )
             return candidate
 
-    mode_dir = base / mode
+    mode_dir = base / target_mode
     available = []
     if mode_dir.exists():
         available = sorted(
@@ -103,6 +103,7 @@ def evaluate_sac(
     mode: str,
     n_episodes: int = 100,
     use_hard_test: bool = False,
+    use_obstacle: bool = False,
     seed: int = 9999,
     verbose: bool = True,
 ) -> Dict:
@@ -130,6 +131,13 @@ def evaluate_sac(
 
     def make_env():
         env = HalcyonAUVEnv(xml_path=str(xml_path))
+
+        # Inject the Obstacle Wrapper if flag is passed
+        if use_obstacle:
+            from auv_obstacle_env import ObstacleAUVWrapper
+
+            env = ObstacleAUVWrapper(env)
+
         wrapper = AUVDomainRandomWrapper(env, mode=mode, seed=seed, verbose=False)
         wrapper._sample_and_apply(test_config)
         return wrapper
@@ -218,6 +226,7 @@ def evaluate_pid(
     xml_path: Path,
     n_episodes: int = 100,
     use_hard_test: bool = False,
+    use_obstacle: bool = False,
     seed: int = 9999,
     verbose: bool = True,
 ) -> Dict:
@@ -244,6 +253,12 @@ def evaluate_pid(
 
     for ep in range(n_episodes):
         env = HalcyonAUVEnv(xml_path=str(xml_path))
+
+        if use_obstacle:
+            from auv_obstacle_env import ObstacleAUVWrapper
+
+            env = ObstacleAUVWrapper(env)
+
         wrapper = AUVDomainRandomWrapper(
             env, mode="uniform", seed=int(rng.integers(0, 10000)), verbose=False
         )
@@ -374,7 +389,7 @@ def print_summary_table(all_results: List[Dict]):
     )
     print(f"  {'-' * 22} {'-' * 8} {'-' * 12} {'-' * 8} {'-' * 12} {'-' * 12}")
     for r in all_results:
-        label = f"{r['mode']} s{r.get('seed', '-')}"
+        label = f"{r.get('target_mode', r['mode'])} s{r.get('seed', '-')}"
         print(
             f"  {label:<22} "
             f"{r['success_rate'] * 100:>7.1f}% "
@@ -415,6 +430,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all-seeds", action="store_true")
     p.add_argument("--all", action="store_true", help="Evaluate all 9 trained models")
     p.add_argument("--pid", action="store_true")
+    p.add_argument(
+        "--master", action="store_true", help="Evaluate master runs with sensor noise"
+    )
+    p.add_argument(
+        "--obstacle",
+        action="store_true",
+        help="Enable ObstacleAUVWrapper (23-dim observation space)",
+    )
     p.add_argument("--episodes", type=int, default=100)
     p.add_argument("--hard-test", action="store_true")
     p.add_argument("--run-name", type=str, default=None)
@@ -434,6 +457,10 @@ def main():
     print(f"[eval] Base dir: {base_dir}")
     print(f"[eval] Episodes: {args.episodes}")
     print(f"[eval] Test dist: {'HARD' if args.hard_test else 'standard'}")
+    if args.master:
+        print(f"[eval] Master run execution enabled.")
+    if args.obstacle:
+        print(f"[eval] Obstacle environment enabled (23-dim).")
 
     all_results = []
 
@@ -442,6 +469,7 @@ def main():
             xml_path=xml_path,
             n_episodes=args.episodes,
             use_hard_test=args.hard_test,
+            use_obstacle=args.obstacle,
             verbose=True,
         )
         print_results(results)
@@ -462,9 +490,11 @@ def main():
         eval_list = [(args.mode, args.seed)]
 
     for mode, seed in eval_list:
-        run_name = args.run_name or f"{mode}_seed{seed}"
+        target_mode = f"master_{mode}" if args.master else mode
+        run_name = args.run_name or f"{target_mode}_seed{seed}"
+
         try:
-            run_dir = resolve_run_dir(base_dir, mode, run_name)
+            run_dir = resolve_run_dir(base_dir, target_mode, run_name)
         except FileNotFoundError as e:
             print(f"\n[eval] SKIP — {e}")
             continue
@@ -476,16 +506,18 @@ def main():
                 mode=mode,
                 n_episodes=args.episodes,
                 use_hard_test=args.hard_test,
+                use_obstacle=args.obstacle,
                 seed=9999 + seed,
                 verbose=True,
             )
             results["seed"] = seed
             results["run_name"] = run_dir.name
+            results["target_mode"] = target_mode
             print_results(results)
             save_results(results, run_dir / "test_eval_results.json")
             all_results.append(results)
         except Exception as e:
-            print(f"\n[eval] ERROR {mode} seed{seed}: {e}")
+            print(f"\n[eval] ERROR {target_mode} seed{seed}: {e}")
             import traceback
 
             traceback.print_exc()

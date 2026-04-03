@@ -19,7 +19,10 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import Wrapper
 
-from auv_env import HalcyonAUVEnv
+try:
+    from auv_env import HalcyonAUVEnv
+except ImportError:
+    from envs.auv_env import HalcyonAUVEnv
 
 
 # ══════════════════════════════════════════════════════════════════════════════

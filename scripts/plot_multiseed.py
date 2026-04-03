@@ -1,148 +1,133 @@
-"""
-plot_multiseed.py — Publication-Ready Multi-Seed RL Data Aggregation
-================================================================================
-Extracts data from multiple TensorBoard logs, calculates the mean and standard
-deviation across seeds, and plots an academic dual-axis graph.
-"""
-
 import os
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
+from pathlib import Path
+from scipy.ndimage import gaussian_filter1d
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-from scipy.interpolate import interp1d
 
 
-def extract_tb_data(log_dir, tag):
-    """Finds the log file in a directory and extracts steps and values for a tag."""
-    search_pattern = os.path.join(log_dir, "**", "events.out.tfevents.*")
-    event_files = glob.glob(search_pattern, recursive=True)
+def get_data_from_npz(npz_path):
+    """Extracts evaluation data from evaluations.npz file."""
+    try:
+        data = np.load(npz_path)
+        # timesteps: [10000, 20000, ...]
+        # results: [num_evals, num_episodes] -> we take the mean across episodes
+        timesteps = data["timesteps"]
+        results = data["results"]
+        mean_rewards = np.mean(results, axis=1)
+        return timesteps, mean_rewards
+    except Exception:
+        return None, None
+
+
+def get_data_from_tb(log_dir):
+    """Extracts data from TensorBoard events file."""
+    tag = "rollout/ep_rew_mean"
+    event_files = glob.glob(str(log_dir / "**/events.out.tfevents.*"), recursive=True)
     if not event_files:
         return None, None
-
     event_file = max(event_files, key=os.path.getctime)
-    ea = EventAccumulator(event_file)
-    ea.Reload()
-
-    if tag not in ea.Tags().get("scalars", []):
+    try:
+        ea = EventAccumulator(str(event_file))
+        ea.Reload()
+        if tag not in ea.Tags()["scalars"]:
+            return None, None
+        events = ea.Scalars(tag)
+        return np.array([e.step for e in events]), np.array([e.value for e in events])
+    except Exception:
         return None, None
-
-    events = ea.Scalars(tag)
-    return np.array([e.step for e in events]), np.array([e.value for e in events])
 
 
 def main():
-    base_dir = os.path.expanduser("~/rl_research/auv/master_curriculum")
-    seed_dirs = [
-        os.path.join(base_dir, d)
-        for d in os.listdir(base_dir)
-        if "seed" in d and os.path.isdir(os.path.join(base_dir, d))
+    base_path = Path.home() / "rl_research" / "auv"
+    modes = ["none", "uniform", "curriculum"]
+    colors = {"none": "#e74c3c", "uniform": "#f39c12", "curriculum": "#3498db"}
+    data_dict = {m: [] for m in modes}
+
+    print(f"📂 Scanning AUV Research Vault: {base_path}")
+
+    # 1. Recursive Scan for all subdirectories
+    all_run_dirs = [
+        d for d in base_path.rglob("*") if d.is_dir() and "seed" in d.name.lower()
     ]
 
-    print(f"🔍 Found {len(seed_dirs)} seed directories.")
+    for run_dir in all_run_dirs:
+        # Identify mode
+        active_mode = next((m for m in modes if m in str(run_dir).lower()), None)
+        if not active_mode:
+            continue
 
-    sr_tag = "rollout/success_rate"
-    curr_tag = "cdr/curriculum_level"
+        # Plan A: Try TensorBoard
+        steps, values = get_data_from_tb(run_dir)
 
-    all_sr_interp = []
-    all_curr_interp = []
+        # Plan B: Try NPZ if TB failed
+        if steps is None:
+            npz_file = run_dir / "eval" / "evaluations.npz"
+            if npz_file.exists():
+                steps, values = get_data_from_npz(npz_file)
 
-    # Create a common X-axis (steps) to interpolate all seeds onto
-    common_steps = np.linspace(0, 1000000, num=1000)
+        if steps is not None and len(values) > 2:
+            common_steps = np.linspace(0, 1_000_000, 1000)
+            interp_val = np.interp(common_steps, steps, values)
+            smoothed_val = gaussian_filter1d(interp_val, sigma=5)
+            data_dict[active_mode].append(smoothed_val)
+            print(f" ✅ Loaded {active_mode.upper()} from {run_dir.name}")
 
-    for s_dir in seed_dirs:
-        steps_sr, vals_sr = extract_tb_data(s_dir, sr_tag)
-        steps_cr, vals_cr = extract_tb_data(s_dir, curr_tag)
+    # 2. Plotting logic
+    plt.figure(figsize=(10, 6))
+    plotted = False
+    for mode, value_list in data_dict.items():
+        if not value_list:
+            continue
+        plotted = True
+        stacked = np.vstack(value_list)
+        mean_vals, common_axis = (
+            np.mean(stacked, axis=0),
+            np.linspace(0, 1_000_000, 1000),
+        )
 
-        if steps_sr is not None and steps_cr is not None:
-            # Interpolate so all seeds share the exact same step intervals
-            f_sr = interp1d(
-                steps_sr,
-                vals_sr,
-                kind="linear",
-                bounds_error=False,
-                fill_value="extrapolate",
+        if len(value_list) > 1:
+            std_vals = np.std(stacked, axis=0)
+            plt.fill_between(
+                common_axis,
+                mean_vals - std_vals,
+                mean_vals + std_vals,
+                color=colors[mode],
+                alpha=0.15,
             )
-            f_cr = interp1d(
-                steps_cr,
-                vals_cr,
-                kind="previous",
-                bounds_error=False,
-                fill_value="extrapolate",
-            )
+        plt.plot(
+            common_axis,
+            mean_vals,
+            label=f"SAC-{mode.capitalize()} (N={len(value_list)})",
+            color=colors[mode],
+            lw=2,
+        )
 
-            all_sr_interp.append(f_sr(common_steps))
-            all_curr_interp.append(f_cr(common_steps))
-
-    if not all_sr_interp:
-        print("Error: No valid data found in seed directories.")
+    if not plotted:
+        print("❌ No data found in either TB or NPZ formats.")
         return
 
-    # Calculate Mean and Standard Deviation
-    sr_mean = np.mean(all_sr_interp, axis=0)
-    sr_std = np.std(all_sr_interp, axis=0)
-
-    curr_mean = np.mean(all_curr_interp, axis=0)
-
-    # Plotting
-    sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
-    fig, ax1 = plt.subplots(figsize=(10, 5), dpi=300)
-
-    # Success Rate (Blue)
-    color1 = "#1f77b4"
-    ax1.set_xlabel("Training Steps", fontweight="bold")
-    ax1.set_ylabel("Mean Success Rate", color=color1, fontweight="bold")
-    ax1.plot(
-        common_steps, sr_mean, color=color1, linewidth=2.5, label="Success Rate (Mean)"
-    )
-    # Add shaded variance
-    ax1.fill_between(
-        common_steps,
-        sr_mean - sr_std,
-        sr_mean + sr_std,
-        color=color1,
-        alpha=0.2,
-        label="± 1 Std Dev",
-    )
-    ax1.tick_params(axis="y", labelcolor=color1)
-    ax1.set_ylim([0, 1.05])
-
-    # Curriculum Level (Orange)
-    ax2 = ax1.twinx()
-    color2 = "#ff7f0e"
-    ax2.set_ylabel("Mean Curriculum Level", color=color2, fontweight="bold")
-    ax2.plot(
-        common_steps,
-        curr_mean,
-        color=color2,
-        linewidth=2.5,
-        linestyle="--",
-        label="Curriculum Level",
-    )
-    ax2.tick_params(axis="y", labelcolor=color2)
-    ax2.set_ylim([0, 1.05])
-
     plt.title(
-        f"Robustness across {len(all_sr_interp)} Seeds: CDR Success vs. Difficulty",
+        "AUV Learning Convergence (Multi-Format Support)",
+        fontsize=14,
         fontweight="bold",
-        pad=15,
     )
+    plt.xlabel("Steps")
+    plt.ylabel("Reward")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
 
-    lines_1, labels_1 = ax1.get_legend_handles_labels()
-    lines_2, labels_2 = ax2.get_legend_handles_labels()
-    ax1.legend(
-        lines_1 + lines_2,
-        labels_1 + labels_2,
-        loc="lower right",
-        frameon=True,
-        shadow=True,
+    out_path = (
+        Path.home()
+        / "rl_research"
+        / "paper_assets"
+        / "figures"
+        / "master_learning_curves.pdf"
     )
-
-    fig.tight_layout()
-    output_path = os.path.join(base_dir, "multiseed_learning_curve.png")
-    plt.savefig(output_path, format="png", bbox_inches="tight")
-    print(f"✅ Success! Multi-seed graph saved to: {output_path}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, format="pdf", bbox_inches="tight")
+    print(f"\n🚀 SUCCESS! Figure saved to: {out_path}")
 
 
 if __name__ == "__main__":
