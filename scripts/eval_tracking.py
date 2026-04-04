@@ -121,22 +121,11 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
     print(f"[tracking_eval] Loading from: {run_dir}")
 
     def make_env():
-        # Tracking env with test physics distribution
-        env = HalcyonAUVTrackingEnv(
-            xml_path=str(xml_path),
-            path_speed=0.3,
-            tracking_threshold=1.0,
-            max_tracking_error=5.0,
-        )
+        # Tracking env - match train_tracking.py environment construction
+        env = HalcyonAUVTrackingEnv(xml_path=str(xml_path), path_speed=0.3)
         wrapper = AUVDomainRandomWrapper(
-            env, mode=mode, seed=seed + 9999, verbose=False
+            env, mode=mode, seed=seed + 1000, verbose=False
         )
-        wrapper.set_test_distribution()
-
-        # Inject obstacle wrapper if flag is passed
-        if use_obstacle:
-            wrapper = ObstacleAUVWrapper(wrapper)
-
         return wrapper
 
     vec_env = DummyVecEnv([make_env])
