@@ -1,16 +1,21 @@
 """
-eval_tracking.py — Evaluation script for Phase 3 Trajectory Tracking
-=====================================================================
-Loads a trained SAC model from the tracking task and evaluates it.
-Reports: success rate, tracking error, energy per step.
+eval_tracking.py — Evaluate trajectory tracking models
+=======================================================
+Loads a trained tracking model and evaluates on held-out
+test physics distribution.
+
+Reports: mean tracking error, path progress, reward, energy.
 
 Usage:
     python scripts/eval_tracking.py --mode curriculum --seed 0
+    python scripts/eval_tracking.py --mode uniform --seed 0
+    python scripts/eval_tracking.py --mode none --seed 0
 """
 
 from __future__ import annotations
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 import numpy as np
@@ -18,6 +23,7 @@ import numpy as np
 _SCRIPT_DIR = Path(__file__).parent.resolve()
 _REPO_ROOT = _SCRIPT_DIR.parent
 _ENVS_DIR = _REPO_ROOT / "envs"
+
 for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -25,136 +31,161 @@ for _p in [_REPO_ROOT, _ENVS_DIR, _SCRIPT_DIR]:
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from auv_tracking_env import HalcyonAUVTrackingEnv
-from auv_dr_wrapper import AUVDomainRandomWrapper
-
-N_EVAL_EPISODES = 50
+from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
 
 
-def find_run_dir(mode: str, seed: int, base: Path) -> Path:
-    """Resolves the directory for the tracking models."""
-    run_name = f"tracking_{mode}"
-    run_dir = base / run_name / f"{run_name}_seed{seed}"
-    if not run_dir.exists():
-        raise FileNotFoundError(f"Run directory not found: {run_dir}")
-    return run_dir
+def resolve_paths(mode, seed):
+    on_colab = os.path.exists("/content/drive/MyDrive")
+    if on_colab:
+        base = Path("/content/drive/MyDrive/rl_research/auv")
+    else:
+        base = Path.home() / "rl_research" / "auv"
 
+    run_name = f"tracking_{mode}_seed{seed}"
+    run_dir = base / f"tracking_{mode}" / run_name
 
-def find_xml() -> Path:
-    candidates = [
+    xml_candidates = [
         _ENVS_DIR / "auv.xml",
         Path.home() / "rl_robotics" / "envs" / "auv.xml",
+        Path("/content/rl_robotics/envs/auv.xml"),
     ]
-    for p in candidates:
-        if p.exists():
-            return p
-    raise FileNotFoundError("auv.xml not found")
+    xml_path = next((p for p in xml_candidates if p.exists()), None)
+    if xml_path is None:
+        raise FileNotFoundError("auv.xml not found")
+
+    return run_dir, xml_path
 
 
-def make_eval_env(xml_path: str, seed: int) -> VecNormalize:
-    """Instantiates the tracking environment with test distribution."""
+def evaluate_tracking(mode, seed, n_episodes=50):
+    run_dir, xml_path = resolve_paths(mode, seed)
 
-    def _init():
-        env = HalcyonAUVTrackingEnv(xml_path=str(xml_path), path_speed=0.3)
-        env = AUVDomainRandomWrapper(env, mode="uniform", seed=seed + 9999)
-        env.set_test_distribution()
-        return env
+    model_path = run_dir / "best_model.zip"
+    vecnorm_path = run_dir / "vec_normalize.pkl"
 
-    return DummyVecEnv([_init])
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+    if not vecnorm_path.exists():
+        raise FileNotFoundError(f"VecNormalize not found: {vecnorm_path}")
 
+    print(f"\n[tracking_eval] Mode={mode} Seed={seed}")
+    print(f"[tracking_eval] Loading from: {run_dir}")
 
-def run_eval_loop(model: SAC, vec_env: VecNormalize, n_episodes: int) -> dict:
-    """Executes the evaluation loop and aggregates metrics."""
-    successes, tracking_errors = [], []
-    energies, ep_lengths = [], []
+    def make_env():
+        # Tracking env with test physics distribution
+        env = HalcyonAUVTrackingEnv(
+            xml_path=str(xml_path),
+            path_speed=0.3,
+            tracking_threshold=1.0,
+            max_tracking_error=5.0,
+        )
+        wrapper = AUVDomainRandomWrapper(
+            env, mode=mode, seed=seed + 9999, verbose=False
+        )
+        wrapper.set_test_distribution()
+        return wrapper
 
-    obs = vec_env.reset()
-    ep_energy = 0.0
-    ep_steps = 0
-    ep_count = 0
-
-    while ep_count < n_episodes:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, info = vec_env.step(action)
-
-        # Track energy effort
-        raw_action = action[0]
-        action_mag = float(np.mean(np.abs(raw_action)))
-        ep_energy += action_mag
-        ep_steps += 1
-
-        if done[0]:
-            # Success in tracking means we didn't terminate early due to max error
-            tracking_err = float(info[0].get("mean_tracking_error", 5.0))
-            success = tracking_err < 1.0  # Kept average error under 1m
-
-            successes.append(float(success))
-            tracking_errors.append(tracking_err)
-            energies.append(ep_energy / max(ep_steps, 1))
-            ep_lengths.append(ep_steps)
-
-            ep_count += 1
-            ep_energy = 0.0
-            ep_steps = 0
-
-            if ep_count % 10 == 0:
-                print(
-                    f"  {ep_count}/{n_episodes} | "
-                    f"success={np.mean(successes) * 100:.0f}% | "
-                    f"err={np.mean(tracking_errors):.2f}m"
-                )
-
-    return {
-        "success_rate": float(np.mean(successes)),
-        "mean_tracking_error": float(np.mean(tracking_errors)),
-        "mean_energy_per_step": float(np.mean(energies)),
-        "mean_episode_length": float(np.mean(ep_lengths)),
-        "n_episodes": n_episodes,
-    }
-
-
-def evaluate_tracking(args: argparse.Namespace):
-    on_colab = Path("/content/drive/MyDrive").exists()
-    base = (
-        Path("/content/drive/MyDrive/rl_research/auv")
-        if on_colab
-        else Path.home() / "rl_research" / "auv"
-    )
-
-    run_dir = find_run_dir(args.mode, args.seed, base)
-    xml_path = find_xml()
-
-    print(f"[eval_tracking] Loading: {run_dir}")
-
-    vec_env = make_eval_env(xml_path, args.seed)
-    vec_env = VecNormalize.load(str(run_dir / "vec_normalize.pkl"), vec_env)
+    vec_env = DummyVecEnv([make_env])
+    vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
     vec_env.training = False
     vec_env.norm_reward = False
 
-    model = SAC.load(str(run_dir / "best_model"), env=vec_env)
+    model = SAC.load(str(model_path), env=vec_env)
 
-    print(f"\n[eval_tracking] Running {N_EVAL_EPISODES} episodes...\n")
-    results = run_eval_loop(model, vec_env, N_EVAL_EPISODES)
+    print(f"[tracking_eval] Running {n_episodes} episodes on TEST distribution...")
+
+    rewards = []
+    tracking_errors = []
+    path_progresses = []
+    energies = []
+    episode_lengths = []
+
+    for ep in range(n_episodes):
+        obs = vec_env.reset()
+        ep_reward = 0.0
+        ep_tracking = []
+        ep_energy = []
+        ep_steps = 0
+        done = False
+
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, info = vec_env.step(action)
+            ep_reward += float(reward[0])
+            ep_tracking.append(info[0].get("tracking_error", 0.0))
+            ep_energy.append(float(np.mean(np.abs(action[0]))))
+            ep_steps += 1
+
+            if done[0]:
+                path_progresses.append(info[0].get("path_progress", 0.0))
+
+        rewards.append(ep_reward)
+        tracking_errors.append(float(np.mean(ep_tracking)))
+        energies.append(float(np.mean(ep_energy)))
+        episode_lengths.append(ep_steps)
+
+        if (ep + 1) % 10 == 0:
+            print(
+                f"  {ep + 1}/{n_episodes} | "
+                f"tracking_error={np.mean(tracking_errors):.3f}m | "
+                f"path_progress={np.mean(path_progresses) * 100:.1f}%"
+            )
+
+    vec_env.close()
+
+    # Success = mean tracking error below threshold
+    tracking_success = float(np.mean([e < 1.0 for e in tracking_errors]))
+
+    results = {
+        "mode": mode,
+        "seed": seed,
+        "task": "trajectory_tracking",
+        "n_episodes": n_episodes,
+        "eval_type": "held_out_test",
+        "tracking_success_rate": tracking_success,
+        "mean_tracking_error": float(np.mean(tracking_errors)),
+        "std_tracking_error": float(np.std(tracking_errors)),
+        "mean_path_progress": float(np.mean(path_progresses)),
+        "std_path_progress": float(np.std(path_progresses)),
+        "mean_reward": float(np.mean(rewards)),
+        "std_reward": float(np.std(rewards)),
+        "mean_energy_per_step": float(np.mean(energies)),
+        "std_energy_per_step": float(np.std(energies)),
+        "mean_episode_length": float(np.mean(episode_lengths)),
+    }
 
     print(f"\n{'=' * 55}")
-    print(f"  TRACKING EVAL — {args.mode.upper()} seed={args.seed}")
-    print(f"  Success rate:    {results['success_rate'] * 100:.1f}%")
-    print(f"  Tracking Error:  {results['mean_tracking_error']:.2f}m")
-    print(f"  Energy/step:     {results['mean_energy_per_step']:.4f}")
-    print(f"{'=' * 55}\n")
+    print(f"  TRACKING EVAL — {mode.upper()} seed={seed}")
+    print(f"  Tracking success:    {results['tracking_success_rate'] * 100:.1f}%")
+    print(
+        f"  Mean tracking error: {results['mean_tracking_error']:.3f}m "
+        f"± {results['std_tracking_error']:.3f}m"
+    )
+    print(f"  Mean path progress:  {results['mean_path_progress'] * 100:.1f}%")
+    print(
+        f"  Mean reward:         {results['mean_reward']:.2f} "
+        f"± {results['std_reward']:.2f}"
+    )
+    print(
+        f"  Energy/step:         {results['mean_energy_per_step']:.4f} "
+        f"± {results['std_energy_per_step']:.4f}"
+    )
+    print(f"{'=' * 55}")
 
-    out = run_dir / "test_tracking_eval_results.json"
-    with open(out, "w") as f:
+    save_path = run_dir / "tracking_eval_results.json"
+    with open(save_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[eval_tracking] Saved → {out}")
-    vec_env.close()
+    print(f"\n[tracking_eval] Saved → {save_path}")
+
+    return results
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["none", "uniform", "curriculum"], required=True)
+    p.add_argument("--mode", required=True, choices=["none", "uniform", "curriculum"])
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--episodes", type=int, default=50)
     args = p.parse_args()
-    evaluate_tracking(args)
+    evaluate_tracking(args.mode, args.seed, args.episodes)
 
 
 if __name__ == "__main__":
