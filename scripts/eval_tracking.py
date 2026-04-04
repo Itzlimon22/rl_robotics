@@ -56,7 +56,7 @@ def resolve_paths(mode, seed):
     return run_dir, xml_path
 
 
-def evaluate_tracking(mode, seed, n_episodes=50):
+def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
     run_dir, xml_path = resolve_paths(mode, seed)
 
     model_path = run_dir / "best_model.zip"
@@ -68,6 +68,8 @@ def evaluate_tracking(mode, seed, n_episodes=50):
         raise FileNotFoundError(f"VecNormalize not found: {vecnorm_path}")
 
     print(f"\n[tracking_eval] Mode={mode} Seed={seed}")
+    if use_obstacle:
+        print(f"[tracking_eval] Using obstacle wrapper")
     print(f"[tracking_eval] Loading from: {run_dir}")
 
     def make_env():
@@ -82,6 +84,13 @@ def evaluate_tracking(mode, seed, n_episodes=50):
             env, mode=mode, seed=seed + 9999, verbose=False
         )
         wrapper.set_test_distribution()
+
+        # Inject obstacle wrapper if flag is passed
+        if use_obstacle:
+            from auv_obstacle_env import ObstacleAUVWrapper
+
+            wrapper = ObstacleAUVWrapper(wrapper)
+
         return wrapper
 
     vec_env = DummyVecEnv([make_env])
@@ -184,8 +193,13 @@ def main():
     p.add_argument("--mode", required=True, choices=["none", "uniform", "curriculum"])
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--episodes", type=int, default=50)
+    p.add_argument(
+        "--obstacle",
+        action="store_true",
+        help="Enable ObstacleAUVWrapper (23-dim observation space)",
+    )
     args = p.parse_args()
-    evaluate_tracking(args.mode, args.seed, args.episodes)
+    evaluate_tracking(args.mode, args.seed, args.episodes, use_obstacle=args.obstacle)
 
 
 if __name__ == "__main__":
