@@ -33,6 +33,53 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from auv_tracking_env import HalcyonAUVTrackingEnv
 from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
 from auv_obstacle_env import ObstacleAUVWrapper
+import gymnasium as gym
+from gymnasium import spaces
+
+
+class ObsShapeAdapter(gym.Wrapper):
+    """Adapts observation shape by padding or truncating to match expected dimensions."""
+
+    def __init__(self, env, target_shape):
+        super().__init__(env)
+        self.target_shape = target_shape
+        current_shape = env.observation_space.shape[0]
+        self.pad_amount = max(0, target_shape - current_shape)
+        self.truncate_amount = max(0, current_shape - target_shape)
+
+        # Update observation space
+        low = np.concatenate(
+            [
+                np.array(env.observation_space.low),
+                np.full(self.pad_amount, -np.inf),
+            ]
+        )[:target_shape]
+        high = np.concatenate(
+            [
+                np.array(env.observation_space.high),
+                np.full(self.pad_amount, np.inf),
+            ]
+        )[:target_shape]
+        self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        obs = self._adapt_obs(obs)
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        obs = self._adapt_obs(obs)
+        return obs, info
+
+    def _adapt_obs(self, obs):
+        """Pad or truncate observation to target shape."""
+        current_len = obs.shape[0] if isinstance(obs, np.ndarray) else len(obs)
+        if self.pad_amount > 0:
+            obs = np.concatenate([obs, np.zeros(self.pad_amount, dtype=np.float32)])
+        elif self.truncate_amount > 0:
+            obs = obs[: self.target_shape]
+        return obs.astype(np.float32)
 
 
 def resolve_paths(mode, seed):
@@ -116,11 +163,56 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
         vec_env.norm_reward = False
         model = SAC.load(str(model_path))
         print(f"[tracking_eval] ✓ Model loaded (no VecNormalize)")
+
+        # Check if observation shape mismatch and wrap if needed
+        model_obs_shape = model.policy.observation_space.shape[0]
+        env_obs_shape = vec_env.observation_space.shape[0]
+        if model_obs_shape != env_obs_shape:
+            print(
+                f"[tracking_eval] Obs shape mismatch: model expects {model_obs_shape}, "
+                f"env provides {env_obs_shape}. Padding observations..."
+            )
+
+            # Wrap vec_env to adapt observations
+            # Create a wrapper around the vectorized environment
+            class VecObsAdapter:
+                """Adapts vectorized observations by padding."""
+
+                def __init__(self, vec_env, target_shape):
+                    self.vec_env = vec_env
+                    self.target_shape = target_shape
+                    self.current_shape = vec_env.observation_space.shape[0]
+                    self.pad_amount = target_shape - self.current_shape
+
+                def reset(self):
+                    obs = self.vec_env.reset()
+                    return self._adapt_obs(obs)
+
+                def step(self, action):
+                    obs, reward, done, info = self.vec_env.step(action)
+                    obs = self._adapt_obs(obs)
+                    return obs, reward, done, info
+
+                def _adapt_obs(self, obs):
+                    if self.pad_amount > 0:
+                        padding = np.zeros(
+                            (obs.shape[0], self.pad_amount), dtype=np.float32
+                        )
+                        return np.concatenate([obs, padding], axis=1)
+                    return obs
+
+                def close(self):
+                    self.vec_env.close()
+
+            eval_env = VecObsAdapter(vec_env, model_obs_shape)
+        else:
+            eval_env = vec_env
     else:
         vec_env.training = False
         vec_env.norm_reward = False
         model = SAC.load(str(model_path), env=model_env)
         print(f"[tracking_eval] ✓ Model loaded with VecNormalize")
+        eval_env = vec_env
 
     print(f"[tracking_eval] Running {n_episodes} episodes on TEST distribution...")
 
@@ -131,7 +223,7 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
     episode_lengths = []
 
     for ep in range(n_episodes):
-        obs = vec_env.reset()
+        obs = eval_env.reset()
         ep_reward = 0.0
         ep_tracking = []
         ep_energy = []
@@ -140,7 +232,7 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, info = vec_env.step(action)
+            obs, reward, done, info = eval_env.step(action)
             ep_reward += float(reward[0])
             ep_tracking.append(info[0].get("tracking_error", 0.0))
             ep_energy.append(float(np.mean(np.abs(action[0]))))
@@ -161,7 +253,7 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
                 f"path_progress={np.mean(path_progresses) * 100:.1f}%"
             )
 
-    vec_env.close()
+    eval_env.close()
 
     # Success = mean tracking error below threshold
     tracking_success = float(np.mean([e < 1.0 for e in tracking_errors]))
