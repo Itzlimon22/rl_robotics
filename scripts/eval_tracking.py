@@ -95,33 +95,56 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
     vec_env = DummyVecEnv([make_env])
 
     # Try loading VecNormalize; if shape mismatch, try with obstacle wrapper
+    vec_norm_loaded = False
     try:
         vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
+        vec_norm_loaded = True
     except AssertionError as e:
         if "spaces must have the same shape" in str(e):
             print(f"[tracking_eval] Shape mismatch detected: {e}")
-            print(f"[tracking_eval] Retrying with ObstacleAUVWrapper...")
+            print(f"[tracking_eval] Attempting recovery with obstacle wrapper...")
 
-            # Recreate environment with obstacle wrapper
-            def make_env_with_obstacle():
-                env = HalcyonAUVTrackingEnv(
-                    xml_path=str(xml_path),
-                    path_speed=0.3,
-                    tracking_threshold=1.0,
-                    max_tracking_error=5.0,
-                )
-                env = ObstacleAUVWrapper(env)
-                wrapper = AUVDomainRandomWrapper(
-                    env, mode=mode, seed=seed + 9999, verbose=False
-                )
-                wrapper.set_test_distribution()
-                return wrapper
+            # Try different obstacle configurations
+            for n_obs in [5, 3, 2, 1]:
+                try:
+                    print(f"[tracking_eval] Trying with n_obstacles={n_obs}...")
 
-            vec_env = DummyVecEnv([make_env_with_obstacle])
-            vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
-            print(
-                f"[tracking_eval] Successfully loaded with obstacle wrapper (shape match)"
-            )
+                    def make_env_with_obstacles():
+                        env = HalcyonAUVTrackingEnv(
+                            xml_path=str(xml_path),
+                            path_speed=0.3,
+                            tracking_threshold=1.0,
+                            max_tracking_error=5.0,
+                        )
+                        env = ObstacleAUVWrapper(
+                            env, n_obstacles=n_obs, collision_penalty=20.0
+                        )
+                        wrapper = AUVDomainRandomWrapper(
+                            env, mode=mode, seed=seed + 9999, verbose=False
+                        )
+                        wrapper.set_test_distribution()
+                        return wrapper
+
+                    vec_env = DummyVecEnv([make_env_with_obstacles])
+                    test_obs_space = vec_env.observation_space.shape[0]
+                    print(
+                        f"[tracking_eval]   Environment obs_space shape: {test_obs_space}"
+                    )
+
+                    vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
+                    vec_norm_loaded = True
+                    print(
+                        f"[tracking_eval] ✓ Successfully loaded with n_obstacles={n_obs}"
+                    )
+                    break
+                except AssertionError:
+                    continue
+
+            if not vec_norm_loaded:
+                raise RuntimeError(
+                    f"Could not find matching observation space for vecnorm file. "
+                    f"Expected shape from {vecnorm_path} does not match any standard configuration."
+                )
         else:
             raise
 
