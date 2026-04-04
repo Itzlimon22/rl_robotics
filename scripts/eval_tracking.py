@@ -32,6 +32,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from auv_tracking_env import HalcyonAUVTrackingEnv
 from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
+from auv_obstacle_env import ObstacleAUVWrapper
 
 
 def resolve_paths(mode, seed):
@@ -87,14 +88,43 @@ def evaluate_tracking(mode, seed, n_episodes=50, use_obstacle=False):
 
         # Inject obstacle wrapper if flag is passed
         if use_obstacle:
-            from auv_obstacle_env import ObstacleAUVWrapper
-
             wrapper = ObstacleAUVWrapper(wrapper)
 
         return wrapper
 
     vec_env = DummyVecEnv([make_env])
-    vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
+
+    # Try loading VecNormalize; if shape mismatch, try with obstacle wrapper
+    try:
+        vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
+    except AssertionError as e:
+        if "spaces must have the same shape" in str(e):
+            print(f"[tracking_eval] Shape mismatch detected: {e}")
+            print(f"[tracking_eval] Retrying with ObstacleAUVWrapper...")
+
+            # Recreate environment with obstacle wrapper
+            def make_env_with_obstacle():
+                env = HalcyonAUVTrackingEnv(
+                    xml_path=str(xml_path),
+                    path_speed=0.3,
+                    tracking_threshold=1.0,
+                    max_tracking_error=5.0,
+                )
+                env = ObstacleAUVWrapper(env)
+                wrapper = AUVDomainRandomWrapper(
+                    env, mode=mode, seed=seed + 9999, verbose=False
+                )
+                wrapper.set_test_distribution()
+                return wrapper
+
+            vec_env = DummyVecEnv([make_env_with_obstacle])
+            vec_env = VecNormalize.load(str(vecnorm_path), vec_env)
+            print(
+                f"[tracking_eval] Successfully loaded with obstacle wrapper (shape match)"
+            )
+        else:
+            raise
+
     vec_env.training = False
     vec_env.norm_reward = False
 
