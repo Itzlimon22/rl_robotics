@@ -1,96 +1,170 @@
-cat > ~/rl_robotics/scripts/plot_pipeline.py << 'PYEOF'
+%%bash
+mkdir -p /content/rl_robotics/scripts
+cat > /content/rl_robotics/scripts/plot_pipeline.py << 'PYEOF'
 """
-plot_pipeline.py — Figure 1: CDR algorithm flow diagram
-Output: paper/figures/fig1_pipeline.pdf
-Usage:  python scripts/plot_pipeline.py
+plot_pipeline.py — Figure 1: CDR algorithm flow diagram (Paper Ready)
 """
-import os
+import logging
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import numpy as np
+from pathlib import Path
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+# --- 1. Global Academic Typography Settings ---
 mpl.rcParams.update({
-    "font.family":"serif","font.size":10,
-    "pdf.fonttype":42,"savefig.dpi":300,
+    "font.family": "serif",
+    "font.serif": ["DejaVu Serif", "Times New Roman"],
+    "pdf.fonttype": 42, # TrueType fonts for IEEE/Academic compatibility
+    "ps.fonttype": 42,
+    "savefig.dpi": 400,
+    "savefig.bbox": "tight",
+    "savefig.transparent": False,
+    "savefig.facecolor": "white"
 })
-os.makedirs("paper/figures", exist_ok=True)
 
-fig, ax = plt.subplots(figsize=(12, 5.5))
-ax.set_xlim(0, 12); ax.set_ylim(0, 5.5); ax.axis("off")
+# --- 2. Cohesive Academic Color Palette ---
+C_CORE_BG = "#E8F5EF"; C_CORE_FG = "#1D9E75" # Soft Green (CDR backbone)
+C_EXP_BG  = "#EBF5FB"; C_EXP_FG  = "#2980B9" # Soft Blue (Expand)
+C_CON_BG  = "#FDEDEC"; C_CON_FG  = "#C0392B" # Soft Red (Contract)
+C_SAC_BG  = "#FEF5E7"; C_SAC_FG  = "#D35400" # Soft Orange (SAC)
+C_NEU_BG  = "#F8F9F9"; C_NEU_FG  = "#7F8C8D" # Neutral Gray (Track/Reset)
+C_DARK    = "#2C3E50"; C_LINES   = "#34495E" # Text and Arrows
 
-C_GREEN = "#1D9E75"; C_LIGHT = "#E8F5EF"; C_GRAY = "#F5F5F5"
-C_BLUE  = "#3498DB"; C_RED   = "#E74C3C"; C_DARK = "#2C3E50"
-C_ORG   = "#E67E22"; C_ORG_L = "#FFF3CD"
+# --- 3. Drawing Helper Functions ---
+def draw_box(ax, cx, cy, w, h, title, subtitle=None, bg=C_CORE_BG, fg=C_CORE_FG, bold_title=True):
+    """Draws a rounded rectangle node for the flowchart."""
+    box = mpatches.FancyBboxPatch(
+        (cx - w/2, cy - h/2), w, h,
+        boxstyle="round,pad=0.08,rounding_size=0.15",
+        facecolor=bg, edgecolor=fg, linewidth=1.8, zorder=3
+    )
+    ax.add_patch(box)
+    
+    title_weight = "bold" if bold_title else "normal"
+    ax.text(cx, cy + (0.15 if subtitle else 0), title,
+            ha="center", va="center", fontsize=11, fontweight=title_weight, color=C_DARK, zorder=4)
+    if subtitle:
+        ax.text(cx, cy - 0.20, subtitle,
+                ha="center", va="center", fontsize=9.5, color="#444", zorder=4)
 
-def box(ax, x, y, w, h, txt, sub=None, fc=C_LIGHT, ec=C_GREEN, fs=9, bold=False):
-    r = mpatches.FancyBboxPatch((x-w/2, y-h/2), w, h,
-        boxstyle="round,pad=0.06", facecolor=fc, edgecolor=ec, lw=1.5, zorder=3)
-    ax.add_patch(r)
-    ax.text(x, y+(0.13 if sub else 0), txt,
-            ha="center", va="center", fontsize=fs, color=C_DARK,
-            fontweight="bold" if bold else "normal", zorder=4)
-    if sub:
-        ax.text(x, y-0.22, sub, ha="center", va="center",
-                fontsize=7.5, color="#555", style="italic", zorder=4)
+def draw_line(ax, points, color=C_LINES, lw=1.5, ls="-"):
+    """Draws a line segment between multiple coordinates."""
+    xs, ys = zip(*points)
+    ax.plot(xs, ys, color=color, lw=lw, ls=ls, zorder=1)
 
-def arr(ax, x1, y1, x2, y2, c="#555", lbl=None):
-    ax.annotate("", xy=(x2,y2), xytext=(x1,y1),
-        arrowprops=dict(arrowstyle="->", color=c, lw=1.5), zorder=5)
-    if lbl:
-        ax.text((x1+x2)/2+0.05, (y1+y2)/2+0.15, lbl,
-                ha="center", fontsize=7.5, color=c, style="italic")
+def draw_arrow(ax, pt1, pt2, color=C_LINES, lw=1.5, ls="-", label=None, label_pos=None):
+    """Draws the final arrow head segment, optionally with a label."""
+    ax.annotate("", xy=pt2, xytext=pt1,
+                arrowprops=dict(arrowstyle="-|>,head_width=0.4,head_length=0.6", color=color, lw=lw, ls=ls), zorder=2)
+    if label and label_pos:
+        ax.text(label_pos[0], label_pos[1], label, ha="center", va="center",
+                fontsize=10, color=color,
+                bbox=dict(facecolor='white', edgecolor='none', pad=2), zorder=3)
 
-# Main flow
-box(ax, 1.4, 2.7, 2.2, 0.8, "Episode Reset", "Sample φ~Uniform(ranges)", fc=C_GRAY, ec="#888")
-box(ax, 3.8, 2.7, 1.8, 0.8, "Run Episode",   "500 steps · 25Hz")
-box(ax, 5.9, 2.7, 2.0, 0.8, "Update Window", "W=50 episodes rolling")
-box(ax, 8.1, 2.7, 2.0, 0.8, "Check sr",      "sr = mean(window)")
+# --- 4. Main Diagram Generation ---
+def generate_diagram(output_path_png: Path, output_path_pdf: Path):
+    # Setup canvas (14x7 provides clean breathing room for 5 columns of nodes)
+    fig, ax = plt.subplots(figsize=(14, 7))
+    ax.set_xlim(0, 16); ax.set_ylim(0, 7)
+    ax.axis("off") # Hide coordinate axes
 
-arr(ax, 2.5, 2.7, 2.9, 2.7)
-arr(ax, 4.7, 2.7, 4.9, 2.7)
-arr(ax, 6.9, 2.7, 7.1, 2.7)
+    # --- Node Placement (Centers) ---
+    W, H = 2.4, 0.9 # Standard Width/Height
+    
+    # Backbone
+    draw_box(ax, 1.6, 3.5, W, H, "Episode Reset", r"Sample $\phi \sim \mathcal{U}(r)$", bg=C_NEU_BG, fg=C_NEU_FG)
+    draw_box(ax, 4.8, 3.5, W, H, "Run Episode", r"$500$ steps $\cdot$ $25$Hz")
+    draw_box(ax, 8.0, 3.5, W, H, "Update Window", r"$W=50$ episodes")
+    draw_box(ax, 11.2, 3.5, W, H, "Check Success Rate", r"$sr = \mu_{window}$")
+    
+    # Branches
+    draw_box(ax, 14.0, 5.0, W, H, "EXPAND (+5%)", r"$r \leftarrow r \cdot 1.05$", bg=C_EXP_BG, fg=C_EXP_FG)
+    draw_box(ax, 14.0, 2.0, W, H, "CONTRACT (-3%)", r"$r \leftarrow r \cdot 0.97$", bg=C_CON_BG, fg=C_CON_FG)
+    
+    # Aux Nodes
+    draw_box(ax, 4.8, 1.4, 2.0, 0.7, "SAC Update", r"Actor & Critic", bg=C_SAC_BG, fg=C_SAC_FG)
+    draw_box(ax, 4.8, 5.8, 2.0, 0.7, r"Track $\lambda \in [0,1]$", r"Curriculum level", bg=C_NEU_BG, fg=C_NEU_FG)
 
-# Expand / Contract
-box(ax, 10.2, 4.2, 2.2, 0.7, "EXPAND (+5%)", "ranges → wider",
-    fc="#D5EEF8", ec=C_BLUE, bold=True)
-box(ax, 10.2, 1.2, 2.2, 0.7, "CONTRACT (−3%)", "ranges → narrower",
-    fc="#FAE5E5", ec=C_RED, bold=True)
+    # --- Orthogonal Arrow Routing ---
+    # Backbone Flow
+    draw_arrow(ax, (2.8, 3.5), (3.6, 3.5))
+    draw_arrow(ax, (6.0, 3.5), (6.8, 3.5))
+    draw_arrow(ax, (9.2, 3.5), (10.0, 3.5))
 
-arr(ax, 9.1, 3.1, 10.2, 3.85, c=C_BLUE, lbl="sr > 0.70")
-arr(ax, 9.1, 2.3, 10.2, 1.55, c=C_RED,  lbl="sr < 0.40")
+    # Branching Up (Expand)
+    draw_line(ax, [(12.4, 3.5), (12.8, 3.5), (12.8, 5.0)])
+    draw_arrow(ax, (12.8, 5.0), (12.8, 5.0), color=C_EXP_FG, label=r"$sr > \tau_{upper}$", label_pos=(12.8, 4.3)) # Using 0-length arrow to just draw head over line
+    draw_arrow(ax, (12.8, 5.0), (13.2, 5.0), color=C_EXP_FG)
 
-# SAC Update
-box(ax, 5.9, 1.0, 1.8, 0.7, "SAC Update", "Actor + Critic", fc=C_ORG_L, ec=C_ORG)
-arr(ax, 5.9, 2.3, 5.9, 1.35, c=C_ORG)
+    # Branching Down (Contract)
+    draw_line(ax, [(12.4, 3.5), (12.8, 3.5), (12.8, 2.0)])
+    draw_arrow(ax, (12.8, 2.0), (13.2, 2.0), color=C_CON_FG, label=r"$sr < \tau_{lower}$", label_pos=(12.8, 2.7))
 
-# Curriculum level tracker
-box(ax, 3.5, 4.4, 2.0, 0.65, "Track λ ∈ [0,1]", "Curriculum level", fc="#EEE", ec="#999")
-ax.plot([10.2,10.2,3.5,3.5],[3.85,4.4,4.4,4.4], color="#999", lw=1.0, ls="--", zorder=2)
-arr(ax, 3.5, 4.08, 3.5, 3.08, c="#999")
+    # Maintain (Pass-through)
+    draw_line(ax, [(12.4, 3.5), (15.5, 3.5)], ls="--", color=C_NEU_FG)
+    ax.text(14.0, 3.75, r"$\tau_{lower} \le sr \le \tau_{upper}$", ha="center", va="center", 
+            fontsize=9.5, color=C_NEU_FG, backgroundcolor="white", zorder=3)
 
-# Loop arrow
-ax.annotate("", xy=(1.4, 2.3), xytext=(1.4, 0.4),
-            arrowprops=dict(arrowstyle="->", color="#555", lw=1.5))
-ax.plot([1.4, 11.0, 11.0, 1.4], [0.4, 0.4, 2.7, 2.7],
-        color="#555", lw=1.0, ls=":", zorder=2)
-ax.text(6.2, 0.18, "Next episode → repeat", ha="center", fontsize=8,
-        color="#555", style="italic")
+    # SAC Flow
+    draw_arrow(ax, (4.8, 3.05), (4.8, 1.75), color=C_SAC_FG)
 
-ax.set_title("Curriculum Domain Randomisation (CDR) — Training Loop",
-             fontsize=12, fontweight="bold", pad=12, color=C_DARK)
+    # Tracking Feedback
+    draw_line(ax, [(14.0, 5.45), (14.0, 6.3), (4.8, 6.3)], ls="--", color=C_NEU_FG)
+    draw_arrow(ax, (4.8, 6.3), (4.8, 6.15), ls="--", color=C_NEU_FG)
 
-legend_items = [
-    mpatches.Patch(facecolor=C_LIGHT, edgecolor=C_GREEN, label="CDR mechanism"),
-    mpatches.Patch(facecolor="#D5EEF8", edgecolor=C_BLUE, label="Expand (sr > 0.70)"),
-    mpatches.Patch(facecolor="#FAE5E5", edgecolor=C_RED,  label="Contract (sr < 0.40)"),
-    mpatches.Patch(facecolor=C_ORG_L,  edgecolor=C_ORG,  label="SAC gradient update"),
-]
-ax.legend(handles=legend_items, loc="lower right", fontsize=8, framealpha=0.9)
-plt.tight_layout()
+    # The Loop Back (Next Episode Backbone)
+    draw_line(ax, [(15.2, 5.0), (15.5, 5.0), (15.5, 0.6), (1.6, 0.6)], ls="--", color=C_NEU_FG)
+    draw_line(ax, [(15.2, 2.0), (15.5, 2.0)], ls="--", color=C_NEU_FG)
+    draw_arrow(ax, (1.6, 0.6), (1.6, 3.05), ls="--", color=C_NEU_FG)
+    
+    ax.text(8.0, 0.85, r"Next episode $\rightarrow$ Repeat training loop", ha="center", va="center",
+            fontsize=11, color=C_NEU_FG, style="italic", backgroundcolor="white", zorder=3)
 
-out = "paper/figures/fig1_pipeline.pdf"
-plt.savefig(out, bbox_inches="tight"); print(f"✓ {out}"); plt.close()
+    # --- Title & Legend ---
+    ax.set_title("Curriculum Domain Randomisation (CDR) — Algorithm Flow",
+                 fontsize=14, fontweight="bold", pad=20, color=C_DARK)
+
+    legend_items = [
+        mpatches.Patch(facecolor=C_EXP_BG,  edgecolor=C_EXP_FG,  label="Expand bounds (Harder)"),
+        mpatches.Patch(facecolor=C_CON_BG,  edgecolor=C_CON_FG,  label="Contract bounds (Easier)"),
+        mpatches.Patch(facecolor=C_SAC_BG,  edgecolor=C_SAC_FG,  label="Policy/Value Gradients"),
+        mpatches.Patch(facecolor=C_CORE_BG, edgecolor=C_CORE_FG, label="CDR Core State"),
+    ]
+    ax.legend(handles=legend_items, loc="lower center", bbox_to_anchor=(0.5, -0.05), 
+              ncol=4, fontsize=10, frameon=False)
+
+    # --- Save Execution ---
+    plt.tight_layout()
+    
+    output_path_png.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save PDF for LaTeX inclusion (Scalable Vector)
+    plt.savefig(str(output_path_pdf), dpi=400, bbox_inches="tight")
+    # Save PNG for quick visualization / Web
+    plt.savefig(str(output_path_png), dpi=400, bbox_inches="tight")
+    
+    logging.info(f"✓ Publication PDF saved: {output_path_pdf}")
+    logging.info(f"✓ Preview PNG saved: {output_path_png}")
+    plt.show()
+
+if __name__ == "__main__":
+    # FIX: Environment-Aware Drive Mount
+    try:
+        from google.colab import drive
+        drive.mount('/content/drive', force_remount=True)
+        BASE_DIR = Path('/content/drive/MyDrive/rl_research/auv/paper/figures')
+        logging.info("Google Drive explicitly mounted.")
+    except ImportError:
+        BASE_DIR = Path.home() / "rl_research" / "auv" / "paper" / "figures"
+        logging.info("Local environment detected. Saving to home directory.")
+
+    pdf_out = BASE_DIR / "fig1_pipeline.pdf"
+    png_out = BASE_DIR / "fig1_pipeline.png"
+    
+    generate_diagram(png_out, pdf_out)
 PYEOF
 
-cd ~/rl_robotics && python scripts/plot_pipeline.py
+python3 /content/rl_robotics/scripts/plot_pipeline.py
