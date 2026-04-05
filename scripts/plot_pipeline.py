@@ -7,11 +7,9 @@ from pathlib import Path
 # Configure professional logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-# --- 1. Dynamic Path Resolution (Repo-Safe) ---
-# Resolves the absolute path of this script, then steps up one directory to the repo root
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-OUTPUT_DIR = REPO_ROOT / "paper" / "figures"
+# --- 1. Explicit Output Directory ---
+# Hardcoded to Google Drive for Colab execution
+OUTPUT_DIR = Path("/content/drive/MyDrive/rl_research/auv/paper/figures")
 
 # --- 2. Global Academic Typography Settings ---
 mpl.rcParams.update(
@@ -55,21 +53,7 @@ def draw_node_box(
     fg_color: str = C_CORE_FG,
     is_bold: bool = True,
 ) -> None:
-    """
-    Draws a formatted rounded rectangle node for the flowchart.
-
-    Args:
-        ax (plt.Axes): The matplotlib axis to draw on.
-        cx (float): Center X coordinate.
-        cy (float): Center Y coordinate.
-        width (float): Box width.
-        height (float): Box height.
-        title (str): Main text.
-        subtitle (str, optional): Secondary subtext.
-        bg_color (str): Background hex color.
-        fg_color (str): Edge and text hex color.
-        is_bold (bool): Whether the title should be bold.
-    """
+    """Draws a formatted rounded rectangle node for the flowchart."""
     box = mpatches.FancyBboxPatch(
         (cx - width / 2, cy - height / 2),
         width,
@@ -159,13 +143,8 @@ def draw_arrow_head(
 
 # --- 5. Main Diagram Generation ---
 def generate_cdr_pipeline_diagram(output_dir: Path) -> None:
-    """
-    Constructs the CDR algorithm flowchart and saves it to disk.
-
-    Args:
-        output_dir (Path): The directory where the PDF/PNG files will be saved.
-    """
-    # Early Return: Ensure output directory exists before doing heavy plotting
+    """Constructs the CDR algorithm flowchart and saves it to disk."""
+    # Ensure output directory exists before doing heavy plotting
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -360,9 +339,16 @@ def generate_cdr_pipeline_diagram(output_dir: Path) -> None:
     logging.info(f"✓ PDF saved for LaTeX: {pdf_out}")
     logging.info(f"✓ PNG saved for Web: {png_out}")
 
-    # Close the figure to free up memory (best practice for scripts)
     plt.close(fig)
 
 
 if __name__ == "__main__":
+    # If running inside a Colab notebook cell, mount drive first
+    try:
+        from google.colab import drive
+
+        drive.mount("/content/drive")
+    except ImportError:
+        pass  # Not running in Colab, proceed normally
+
     generate_cdr_pipeline_diagram(OUTPUT_DIR)
