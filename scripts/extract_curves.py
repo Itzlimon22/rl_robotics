@@ -13,8 +13,10 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 
 # Map TB keys to clean names for your paper
 METRIC_MAP = {
-    "rollout/ep_rew_mean": "reward",
-    "rollout/success_rate": "success",
+    "rollout/ep_rew_mean": "train_reward",
+    "eval/mean_reward": "eval_reward",  # <-- CRITICAL for Plot (b)
+    "rollout/success_rate": "train_success",
+    "eval/success_rate": "eval_success",  # <-- If you want clean success curves
     "env/goal_dist": "error",
     "cdr/curriculum_level": "curriculum",
     "cdr/success_rate": "rolling_sr",
