@@ -1,54 +1,58 @@
 """
-extract_curves.py — TB to JSON Extractor
+extract_curves.py — TB & NPZ to JSON Extractor
 ================================================================================
-Extracts training metrics from master and static runs.
-Handles nested SB3 log structures (root vs /eval folders).
+Extracts goal_dist from TensorBoard and true evaluation rewards from evaluations.npz.
 """
 
 import json
-import os
-import sys
+import numpy as np
 from pathlib import Path
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-# Map TB keys to clean names for your paper
+# Map TB keys to clean names (only for TB metrics now)
 METRIC_MAP = {
-    "rollout/ep_rew_mean": "train_reward",
-    "eval/mean_reward": "eval_reward",  # <-- CRITICAL for Plot (b)
-    "rollout/success_rate": "train_success",
-    "eval/success_rate": "eval_success",  # <-- If you want clean success curves
     "env/goal_dist": "error",
     "cdr/curriculum_level": "curriculum",
-    "cdr/success_rate": "rolling_sr",
 }
 
 
-def extract_from_dir(log_dir: Path):
-    """Deep search for event files in a directory and extract metrics."""
+def extract_from_dir(run_dir: Path):
+    """Extracts from both TensorBoard and evaluations.npz"""
     data = {}
-    # Find all event files in the directory and subdirectories
-    event_files = list(log_dir.rglob("events.out.tfevents.*"))
-    if not event_files:
-        return data
 
+    # 1. Get Goal Dist / Training Metrics from TensorBoard
+    event_files = list(run_dir.rglob("events.out.tfevents.*"))
     for event_file in event_files:
         ea = EventAccumulator(str(event_file.parent))
         ea.Reload()
+        scalars = ea.Tags().get("scalars", [])
+
         for tb_key, clean_name in METRIC_MAP.items():
-            if tb_key in ea.Tags()["scalars"]:
+            if tb_key in scalars:
                 events = ea.Scalars(tb_key)
                 if clean_name not in data:
                     data[clean_name] = {"steps": [], "values": []}
                 data[clean_name]["steps"].extend([e.step for e in events])
                 data[clean_name]["values"].extend([float(e.value) for e in events])
 
-    # Sort by steps in case files were read out of order
+    # Sort TB data to prevent matplotlib zigzag rendering
     for k in data:
-        sort_idx = sorted(
-            range(len(data[k]["steps"])), key=lambda i: data[k]["steps"][i]
-        )
+        sort_idx = np.argsort(data[k]["steps"])
         data[k]["steps"] = [data[k]["steps"][i] for i in sort_idx]
         data[k]["values"] = [data[k]["values"][i] for i in sort_idx]
+
+    # 2. Get True Evaluation Rewards from evaluations.npz
+    eval_npz = run_dir / "eval" / "evaluations.npz"
+    if eval_npz.exists():
+        npz_data = np.load(eval_npz)
+        # timesteps shape: (N,)
+        steps = npz_data["timesteps"].tolist()
+        # results shape: (N, n_eval_episodes) -> mean across episodes
+        mean_rewards = npz_data["results"].mean(axis=1).tolist()
+
+        data["reward"] = {"steps": steps, "values": mean_rewards}
+    else:
+        print(f"    [Warning] No evaluations.npz found in {run_dir.name}")
 
     return data
 
@@ -64,7 +68,6 @@ def main():
 
     for task in ["master", "static"]:
         for mode in ["curriculum", "uniform", "none"]:
-            # Pattern: master_curriculum/master_curriculum_seed0
             mode_folder = base / f"{task}_{mode}"
             if not mode_folder.exists():
                 continue
@@ -75,7 +78,6 @@ def main():
                     continue
 
                 print(f"  -> Found: {run_dir.name}")
-                # We extract from the whole tree to get rollout + eval data
                 run_data = extract_from_dir(run_dir)
                 if run_data:
                     results[task][mode].append(run_data)
