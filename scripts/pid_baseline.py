@@ -280,6 +280,7 @@ def run_pid_eval(
     rewards = []
     final_dists = []
     episode_lens = []
+    energy_per_steps = []  # Track energy consumption
 
     for ep in range(n_episodes):
         obs, info = env.reset(seed=seed + ep)
@@ -287,6 +288,7 @@ def run_pid_eval(
 
         ep_reward = 0.0
         ep_steps = 0
+        ep_energy = []  # Track energy this episode
 
         # Get initial goal position from info
         goal_pos = np.array(info["goal_pos"])
@@ -308,6 +310,9 @@ def run_pid_eval(
             ep_reward += reward
             ep_steps += 1
 
+            # Track energy (thrust magnitude per step)
+            ep_energy.append(float(np.mean(np.abs(ctrl))))
+
             if terminated or truncated:
                 break
 
@@ -319,6 +324,7 @@ def run_pid_eval(
         rewards.append(ep_reward)
         final_dists.append(final_dist)
         episode_lens.append(ep_steps)
+        energy_per_steps.append(float(np.mean(ep_energy)) if ep_energy else 0.0)
 
         if verbose and (ep + 1) % 10 == 0:
             sr = np.mean(successes) * 100
@@ -336,6 +342,8 @@ def run_pid_eval(
         "mean_dist": float(np.mean(final_dists)),
         "std_dist": float(np.std(final_dists)),
         "mean_ep_len": float(np.mean(episode_lens)),
+        "mean_energy_per_step": float(np.mean(energy_per_steps)),
+        "std_energy_per_step": float(np.std(energy_per_steps)),
         "gains": {
             k: v.tolist() if isinstance(v, np.ndarray) else v
             for k, v in (gains or DEFAULT_GAINS).items()
@@ -357,6 +365,10 @@ def run_pid_eval(
         print(
             f"  Mean dist:    {results['mean_dist']:.2f}m "
             f"+/- {results['std_dist']:.2f}m"
+        )
+        print(
+            f"  Energy/step:  {results['mean_energy_per_step']:.4f} "
+            f"+/- {results['std_energy_per_step']:.4f}"
         )
         print(f"  Mean ep len:  {results['mean_ep_len']:.0f} steps")
         print(f"{'=' * 55}")
