@@ -234,6 +234,7 @@ def evaluate_tracking(mode, seed, n_episodes=N_EPISODES):
 
 
 def main():
+    global N_EPISODES
     p = argparse.ArgumentParser(description="Evaluate tracking task models")
     p.add_argument(
         "--mode",
@@ -245,7 +246,6 @@ def main():
     p.add_argument("--episodes", type=int, default=N_EPISODES)
     args = p.parse_args()
 
-    global N_EPISODES
     N_EPISODES = args.episodes
 
     if args.all:
