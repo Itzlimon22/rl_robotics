@@ -226,6 +226,7 @@ def run_pid_eval(
     n_episodes: int = 50,
     use_test_dist: bool = False,
     gains: Optional[Dict] = None,
+    kp: Optional[float] = None,
     seed: int = 42,
     verbose: bool = True,
 ) -> Dict:
@@ -239,6 +240,7 @@ def run_pid_eval(
     use_test_dist : If True, use held-out test distribution (paper eval)
                     If False, use training distribution
     gains         : PID gains dict. None = DEFAULT_GAINS
+    kp            : Custom proportional gain. If provided, overrides gains["Kp"]
     seed          : Random seed
     verbose       : Print progress
 
@@ -276,7 +278,7 @@ def run_pid_eval(
         dist_name = "TRAINING"
 
     env = wrapper
-    pid = PIDController(gains=gains, dt=env.env.effective_dt)
+    pid = PIDController(gains=gains, dt=env.env.effective_dt, kp=kp)
 
     if verbose:
         print(f"[pid] Evaluating {n_episodes} episodes on {dist_name} distribution...")

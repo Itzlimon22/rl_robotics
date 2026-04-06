@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import mujoco
 import numpy as np
+from gymnasium.spaces import Box
 
 # Import the base environment
 from auv_env import HalcyonAUVEnv
@@ -36,6 +37,8 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         Radius of lemniscate in XY plane (m). Default 4.0.
     path_speed : float
         Speed of path marker (m/s). Default 0.3.
+    lookahead_time : float
+        Time (seconds) to look ahead for the Pure Pursuit vector. Default 2.0.
     tracking_threshold : float
         Distance (m) within which tracking is considered good. Default 1.0.
     max_tracking_error : float
@@ -48,6 +51,7 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self,
         path_radius: float = 4.0,
         path_speed: float = 0.3,
+        lookahead_time: float = 2.0,
         tracking_threshold: float = 1.0,
         max_tracking_error: float = 5.0,
         n_path_points: int = 500,
@@ -56,15 +60,15 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         super().__init__(**kwargs)
         self.path_radius = path_radius
         self.path_speed = path_speed
+        self.lookahead_time = lookahead_time
         self.tracking_threshold = tracking_threshold
         self.max_tracking_error = max_tracking_error
         self.n_path_points = n_path_points
 
         # ANTI-MODE-COLLAPSE FIX:
-        # We discovered the base SAC policy prefers to "drift" to save energy
-        # when faced with hard currents. For tracking, we must force it to act.
-        self.reward_weights["energy"] = 0.005  # Reduced from 0.02
-        self.reward_weights["progress"] = 15.0  # Increased from 10.0
+        # Force the agent to act instead of drifting to save energy.
+        self.reward_weights["energy"] = 0.005
+        self.reward_weights["progress"] = 15.0
 
         # Path state variables
         self._path_points: np.ndarray = np.zeros((n_path_points, 3))
@@ -72,12 +76,21 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._path_t: float = 0.0
         self._tracking_errors: list = []
 
+        # PROFESSIONAL POLISH: Dynamically extend observation space for Pure Pursuit
+        # This prevents shape mismatch errors when the Obstacle Wrapper is applied later
+        old_shape = self.observation_space.shape[0]
+        self.observation_space = Box(
+            low=-np.inf, high=np.inf, shape=(old_shape + 3,), dtype=np.float32
+        )
+
     def reset(
         self,
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, Dict]:
-        """Resets the AUV and generates a new 3D path."""
+        """
+        Resets the AUV and generates a new 3D parametric path.
+        """
         # Reset base environment (places AUV at origin, handles DR)
         obs, info = super().reset(seed=seed, options=options)
 
@@ -88,21 +101,24 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._tracking_errors = []
 
         # Override the random goal placement from super().reset()
-        # Place goal at the very first path point
         self._goal_pos = self._path_points[0].copy()
         self._set_goal_body(self._goal_pos)
         mujoco.mj_forward(self.model, self.data)
 
         self._prev_dist = self._goal_distance()
 
+        # Re-fetch observation to include the new lookahead vector
         obs = self._get_observation()
+
         info["tracking_error"] = 0.0
         info["path_progress"] = 0.0
         info["is_success"] = False
         return obs, info
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """Advances the simulation and moves the tracking marker."""
+        """
+        Advances the simulation, moves the tracking marker, and computes path rewards.
+        """
         obs, reward, terminated, truncated, info = super().step(action)
 
         # Advance path marker at constant speed
@@ -116,41 +132,67 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         self._tracking_errors.append(tracking_error)
 
         # Apply Tracking-specific Rewards
-        tracking_reward = -0.5 * tracking_error  # penalise deviation from path
+        tracking_reward = -0.5 * tracking_error
         if tracking_error < self.tracking_threshold:
-            tracking_reward += 2.0  # strong bonus for staying tight on the path
+            tracking_reward += 2.0  # Strong bonus for staying tight on the path
 
         reward += tracking_reward
 
-        # Terminate early if the AUV gets completely blown off course
+        # Early Return / Termination trigger
         if tracking_error > self.max_tracking_error:
             terminated = True
 
         path_progress = self._path_idx / max(self.n_path_points - 1, 1)
-
-        # If we survive the whole episode without violating max_tracking_error,
-        # it is considered a successful tracking run.
         is_success = bool(truncated and tracking_error < self.tracking_threshold * 2)
 
         info["tracking_error"] = tracking_error
         info["path_progress"] = path_progress
         info["mean_tracking_error"] = float(np.mean(self._tracking_errors))
-        info["is_success"] = (
-            is_success  # Consumed by AUVDomainRandomWrapper for curriculum updates
-        )
+        info["is_success"] = is_success
 
         return obs, reward, terminated, truncated, info
+
+    def _get_observation(self) -> np.ndarray:
+        """
+        Appends the 3D Pure Pursuit lookahead vector to the base observations.
+        """
+        # 1. Fetch base observations (19-dim base or 23-dim obstacle)
+        base_obs = super()._get_observation()
+
+        # 2. Calculate future target position
+        lookahead_distance = self.path_speed * self.lookahead_time
+        accumulated_dist = 0.0
+        future_idx = self._path_idx
+
+        # Traverse path until we reach the lookahead distance
+        while accumulated_dist < lookahead_distance:
+            next_idx = (future_idx + 1) % self.n_path_points
+            segment_len = np.linalg.norm(
+                self._path_points[next_idx] - self._path_points[future_idx]
+            )
+            accumulated_dist += segment_len
+            future_idx = next_idx
+
+        future_goal_pos_world = self._path_points[future_idx]
+
+        # 3. Transform future global vector into AUV's local body frame
+        auv_pos_world = self.data.qpos[:3]
+        global_lookahead_vec = future_goal_pos_world - auv_pos_world
+
+        # Use MuJoCo's rotation matrix (xmat) for the AUV body (Body ID 1 is standard)
+        # Transposing the world rotation matrix gives the local rotation matrix
+        auv_rotation_matrix = self.data.xmat[1].reshape(3, 3)
+        local_lookahead_vec = auv_rotation_matrix.T @ global_lookahead_vec
+
+        # 4. Concatenate and return
+        return np.concatenate([base_obs, local_lookahead_vec], dtype=np.float32)
 
     def _generate_lemniscate(self) -> np.ndarray:
         """
         Generate a smooth 3D lemniscate (figure-8) path.
-        Parametric equations:
-            x(t) = R * cos(t) / (1 + sin^2(t))
-            y(t) = R * sin(t)*cos(t) / (1 + sin^2(t))
-            z(t) = A * sin(2t)   (gentle vertical oscillation)
         """
         R = self.path_radius
-        A = 1.5  # vertical amplitude (m)
+        A = 1.5
         t = np.linspace(0, 2 * np.pi, self.n_path_points)
 
         denom = 1 + np.sin(t) ** 2
@@ -158,17 +200,17 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         y = R * np.sin(t) * np.cos(t) / denom
         z = A * np.sin(2 * t)
 
-        # Clamp z to valid depth range to prevent hitting seabed/surface
         z = np.clip(z, -6.0, 6.0)
 
         return np.column_stack([x, y, z])
 
-    def _advance_path(self):
-        """Move the physical goal marker along the path based on path_speed."""
+    def _advance_path(self) -> None:
+        """
+        Moves the physical goal marker forward along the path.
+        """
         dt = self.effective_dt
         step_distance = self.path_speed * dt
 
-        # Move to next path point if we've consumed the step_distance
         while self._path_idx < self.n_path_points - 1:
             next_idx = self._path_idx + 1
             segment_len = np.linalg.norm(
@@ -180,11 +222,9 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
             else:
                 break
 
-        # Wrap path (loop forever if episode is long)
         if self._path_idx >= self.n_path_points - 1:
             self._path_idx = 0
 
-        # Update goal marker in MuJoCo
         self._goal_pos = self._path_points[self._path_idx].copy()
         self._set_goal_body(self._goal_pos)
         mujoco.mj_forward(self.model, self.data)
@@ -195,12 +235,13 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
 
 
 if __name__ == "__main__":
-    print("Testing HalcyonAUVTrackingEnv...")
+    print("Testing HalcyonAUVTrackingEnv with Lookahead...")
     env = HalcyonAUVTrackingEnv(path_speed=0.5)
     obs, info = env.reset()
     for _ in range(50):
         obs, r, t, tr, info = env.step(env.action_space.sample())
 
+    print(f"Observation Shape: {obs.shape}")
     print(f"Path Progress after 50 steps: {info['path_progress'] * 100:.1f}%")
     print(f"Tracking Error: {info['tracking_error']:.2f}m")
     env.close()
