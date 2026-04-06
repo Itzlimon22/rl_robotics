@@ -91,14 +91,14 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         """
         Resets the AUV and generates a new 3D parametric path.
         """
-        # Reset base environment (places AUV at origin, handles DR)
-        obs, info = super().reset(seed=seed, options=options)
-
-        # Generate lemniscate path
+        # Generate lemniscate path first to prevent zero-distance loops when super().reset() calls _get_observation
         self._path_points = self._generate_lemniscate()
         self._path_idx = 0
         self._path_t = 0.0
         self._tracking_errors = []
+
+        # Reset base environment (places AUV at origin, handles DR)
+        obs, info = super().reset(seed=seed, options=options)
 
         # Override the random goal placement from super().reset()
         self._goal_pos = self._path_points[0].copy()
@@ -165,13 +165,16 @@ class HalcyonAUVTrackingEnv(HalcyonAUVEnv):
         future_idx = self._path_idx
 
         # Traverse path until we reach the lookahead distance
-        while accumulated_dist < lookahead_distance:
+        max_lookahead_steps = self.n_path_points
+        steps = 0
+        while accumulated_dist < lookahead_distance and steps < max_lookahead_steps:
             next_idx = (future_idx + 1) % self.n_path_points
             segment_len = np.linalg.norm(
                 self._path_points[next_idx] - self._path_points[future_idx]
             )
             accumulated_dist += segment_len
             future_idx = next_idx
+            steps += 1
 
         future_goal_pos_world = self._path_points[future_idx]
 
