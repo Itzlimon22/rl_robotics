@@ -228,6 +228,7 @@ def evaluate_pid(
     use_hard_test: bool = False,
     use_obstacle: bool = False,
     seed: int = 9999,
+    kp: float = 20.0,
     verbose: bool = True,
 ) -> Dict:
     """
@@ -236,7 +237,7 @@ def evaluate_pid(
     if verbose:
         print(f"\n[eval] Running PID baseline for {n_episodes} episodes...")
 
-    Kp = np.array([20.0, 20.0, 20.0])
+    Kp = np.array([kp, kp, kp])  # Use custom kp value
     Ki = np.array([0.1, 0.1, 0.1])
     Kd = np.array([10.0, 10.0, 10.0])
     F_MAX = 20.0
@@ -443,6 +444,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-name", type=str, default=None)
     p.add_argument("--xml", type=str, default=None)
     p.add_argument("--base-dir", type=str, default=None)
+    p.add_argument(
+        "--kp", type=float, default=20.0, help="Proportional gain for PID controller"
+    )
     return p
 
 
@@ -470,6 +474,7 @@ def main():
             n_episodes=args.episodes,
             use_hard_test=args.hard_test,
             use_obstacle=args.obstacle,
+            kp=args.kp,
             verbose=True,
         )
         print_results(results)

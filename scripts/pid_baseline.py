@@ -93,11 +93,17 @@ class PIDController:
         self,
         gains: Optional[Dict] = None,
         dt: float = 0.04,  # 25 Hz (frame_skip=4 × timestep=0.01)
+        kp: Optional[float] = None,  # Override Kp if provided
     ):
         g = gains or DEFAULT_GAINS
         self.Kp = np.array(g["Kp"], dtype=np.float64)
         self.Ki = np.array(g["Ki"], dtype=np.float64)
         self.Kd = np.array(g["Kd"], dtype=np.float64)
+
+        # Override Kp if custom value provided
+        if kp is not None:
+            self.Kp = np.array([kp, kp, kp], dtype=np.float64)
+
         self.F_max = float(g["F_max"])
         self.windup_limit = float(g["windup_limit"])
         self.dt = dt
