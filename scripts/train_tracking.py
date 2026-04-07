@@ -47,12 +47,16 @@ from auv_tracking_env import HalcyonAUVTrackingEnv
 from auv_dr_wrapper import AUVDomainRandomWrapper, make_training_callbacks
 
 
-def make_tracking_train_env(xml_path: str, mode: str, seed: int):
+def make_tracking_train_env(
+    xml_path: str, mode: str, seed: int, cdr_window_size: int = 50
+):
     """Creates the vectorized training environment with DR."""
 
     def _init():
         env = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=0.3)
-        env = AUVDomainRandomWrapper(env, mode=mode, seed=seed, verbose=True)
+        env = AUVDomainRandomWrapper(
+            env, mode=mode, seed=seed, cdr_window_size=cdr_window_size, verbose=True
+        )
         return env
 
     vec = DummyVecEnv([_init])
@@ -66,12 +70,24 @@ def make_tracking_train_env(xml_path: str, mode: str, seed: int):
     )
 
 
-def make_tracking_eval_env(xml_path: str, mode: str, seed: int, train_vn: VecNormalize):
+def make_tracking_eval_env(
+    xml_path: str,
+    mode: str,
+    seed: int,
+    train_vn: VecNormalize,
+    cdr_window_size: int = 50,
+):
     """Creates a deterministic evaluation environment sharing VecNorm stats."""
 
     def _init():
         env = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=0.3)
-        env = AUVDomainRandomWrapper(env, mode=mode, seed=seed + 1000, verbose=False)
+        env = AUVDomainRandomWrapper(
+            env,
+            mode=mode,
+            seed=seed + 1000,
+            cdr_window_size=cdr_window_size,
+            verbose=False,
+        )
         return env
 
     vec = DummyVecEnv([_init])
@@ -99,8 +115,10 @@ def train_tracking(args):
     print(f"Mode: {args.mode} | Seed: {args.seed} | Steps: {args.steps}")
     print(f"Saving to: {save_dir}")
 
-    train_env = make_tracking_train_env(str(xml), args.mode, args.seed)
-    eval_env = make_tracking_eval_env(str(xml), args.mode, args.seed, train_env)
+    train_env = make_tracking_train_env(str(xml), args.mode, args.seed, args.cdr_window)
+    eval_env = make_tracking_eval_env(
+        str(xml), args.mode, args.seed, train_env, args.cdr_window
+    )
 
     params = dict(SAC_HYPERPARAMS)
     params["tensorboard_log"] = str(tb_dir)

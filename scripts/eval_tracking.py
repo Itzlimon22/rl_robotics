@@ -39,6 +39,11 @@ def resolve_base():
     from pathlib import Path
     import os
 
+    # Check local data directory first
+    local_data = Path.home() / "rl_robotics" / "data"
+    if (local_data / "tracking").exists():
+        return local_data / "tracking"
+
     colab = Path("/content/drive/MyDrive/rl_research/auv")
     local = Path.home() / "rl_research" / "auv"
     return colab if colab.exists() else local

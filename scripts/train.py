@@ -221,7 +221,9 @@ def resolve_xml_path(xml_arg: Optional[str]) -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def make_train_env(xml_path: str, mode: str, seed: int) -> VecNormalize:
+def make_train_env(
+    xml_path: str, mode: str, seed: int, cdr_window_size: int = 50
+) -> VecNormalize:
     """
     Create the VecNormalize-wrapped training environment.
 
@@ -235,7 +237,9 @@ def make_train_env(xml_path: str, mode: str, seed: int) -> VecNormalize:
 
     def _init():
         env = HalcyonAUVEnv(xml_path=xml_path)
-        env = AUVDomainRandomWrapper(env, mode=mode, seed=seed, verbose=True)
+        env = AUVDomainRandomWrapper(
+            env, mode=mode, seed=seed, cdr_window_size=cdr_window_size, verbose=True
+        )
         return env
 
     vec_env = DummyVecEnv([_init])
@@ -251,7 +255,11 @@ def make_train_env(xml_path: str, mode: str, seed: int) -> VecNormalize:
 
 
 def make_eval_env(
-    xml_path: str, mode: str, seed: int, vec_normalize: VecNormalize
+    xml_path: str,
+    mode: str,
+    seed: int,
+    vec_normalize: VecNormalize,
+    cdr_window_size: int = 50,
 ) -> VecNormalize:
     """
     Create evaluation environment sharing VecNormalize statistics with training env.
@@ -277,7 +285,13 @@ def make_eval_env(
         env = HalcyonAUVEnv(xml_path=xml_path)
         # Eval env uses same DR mode — evaluates on same distribution as training.
         # For held-out test distribution evaluation, use eval.py separately.
-        env = AUVDomainRandomWrapper(env, mode=mode, seed=seed + 1000, verbose=False)
+        env = AUVDomainRandomWrapper(
+            env,
+            mode=mode,
+            seed=seed + 1000,
+            cdr_window_size=cdr_window_size,
+            verbose=False,
+        )
         return env
 
     eval_vec = DummyVecEnv([_init])
@@ -477,10 +491,12 @@ def train(args: argparse.Namespace):
 
     # ── Environments ──────────────────────────────────────────────────────────
     print("\n[env]  Building training environment...")
-    train_env = make_train_env(str(xml_path), args.mode, args.seed)
+    train_env = make_train_env(str(xml_path), args.mode, args.seed, args.cdr_window)
 
     print("[env]  Building eval environment...")
-    eval_env = make_eval_env(str(xml_path), args.mode, args.seed, train_env)
+    eval_env = make_eval_env(
+        str(xml_path), args.mode, args.seed, train_env, args.cdr_window
+    )
 
     # ── Model ─────────────────────────────────────────────────────────────────
     hyperparams = dict(SAC_HYPERPARAMS)
@@ -633,6 +649,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Base save directory. Auto-detected (local or Colab Drive) if not set.",
+    )
+    p.add_argument(
+        "--cdr-window",
+        type=int,
+        default=50,
+        help="Curriculum domain randomisation: rolling window size for success rate tracking.",
     )
     return p
 
