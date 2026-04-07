@@ -7,18 +7,22 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 def extract_run(run_dir: Path):
     data = {}
 
-    # 1. Get Goal Dist from TensorBoard
-    for tf_file in run_dir.rglob("events.out.tfevents.*"):
-        ea = EventAccumulator(str(tf_file.parent))
-        ea.Reload()
-        if "env/goal_dist" in ea.Tags().get("scalars", []):
-            events = ea.Scalars("env/goal_dist")
-            data["env/goal_dist"] = {
-                "steps": [e.step for e in events],
-                "values": [e.value for e in events],
-            }
+    # 1. Get Goal Dist from TensorBoard (Fixed to avoid loop-overwriting)
+    tb_dir = run_dir / "tensorboard"
+    if not tb_dir.exists():
+        tb_dir = run_dir  # Fallback if logs are directly in the run folder
 
-    # 2. Get True Rewards from evaluations.npz
+    ea = EventAccumulator(str(tb_dir), size_guidance={"scalars": 0})
+    ea.Reload()
+
+    if "scalars" in ea.Tags() and "env/goal_dist" in ea.Tags()["scalars"]:
+        events = ea.Scalars("env/goal_dist")
+        data["env/goal_dist"] = {
+            "steps": [e.step for e in events],
+            "values": [e.value for e in events],
+        }
+
+    # 2. Get True Rewards from evaluations.npz (Brilliant move!)
     npz_file = run_dir / "eval" / "evaluations.npz"
     if npz_file.exists():
         npz = np.load(npz_file)
@@ -39,6 +43,11 @@ def main():
     else:
         base = Path.home() / "rl_research" / "auv"
 
+    # Route output strictly to the paper/data directory per your rule
+    out_dir = base / "paper" / "data"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "training_curves.json"
+
     output = {"env/goal_dist": {}, "eval/mean_reward": {}}
     modes = ["none", "uniform", "curriculum"]
 
@@ -49,7 +58,14 @@ def main():
         output["eval/mean_reward"][mode] = []
 
         for seed in [0, 1, 2]:
-            run_dir = base / mode / f"{mode}_seed{seed}"
+            # FIXED: Added the "tracking_" prefix to match your actual run names
+            run_name = f"tracking_{mode}_seed{seed}"
+
+            # Check both possible SB3 save structures
+            run_dir = base / "tracking" / run_name
+            if not run_dir.exists():
+                run_dir = base / mode / run_name  # Fallback
+
             if run_dir.exists():
                 print(f"  -> Extracting: {run_dir.name}")
                 run_data = extract_run(run_dir)
@@ -61,9 +77,8 @@ def main():
                         run_data["eval/mean_reward"]
                     )
             else:
-                print(f"    [Skip] Not found: {run_dir.name}")
+                print(f"    [Skip] Not found: {run_dir}")
 
-    out_file = base / "training_curves.json"
     with open(out_file, "w") as f:
         json.dump(output, f)
     print(f"\n✅ Extracted and saved to {out_file}")
