@@ -151,6 +151,12 @@ def train_tracking(args):
 
 def main():
     p = build_parser()
+    p.add_argument(
+        "--ablation-param",
+        type=str,
+        default="none",
+        help="Specific physics parameter to randomize (for ablation study)",
+    )
     args = p.parse_args()
     train_tracking(args)
 
