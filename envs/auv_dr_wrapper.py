@@ -1,11 +1,13 @@
+# File: envs/auv_dr_wrapper.py
+
 """
 auv_dr_wrapper.py — AUVDomainRandomWrapper
 ================================================================================
 Domain Randomisation wrapper for HalcyonAUVEnv.
 Supports hierarchical stacking (e.g., Tracking -> Obstacles -> DR).
 
-This version restores all factory functions and logging callbacks required
-by train.py and train_master.py.
+This version includes the targeted Ablation Study logic to isolate
+individual physical parameters for sim-to-real gap analysis.
 """
 
 from __future__ import annotations
@@ -54,6 +56,18 @@ TEST_PARAM_CONFIG: Dict[str, Tuple[float, float]] = {
     "ang_noise_std": (0.01, 0.04),
 }
 
+EXTREME_TEST_CONFIG: Dict[str, Tuple[float, float]] = {
+    "c_drag_lateral": (1.00, 2.00),  # 200% of max training bound
+    "c_drag_axial": (0.40, 0.80),  # 200% of max training bound
+    "buoyancy_offset": (-0.20, 0.30),  # Extreme mass/buoyancy mismatch
+    "current_speed": (0.60, 1.20),  # Massive water currents
+    "added_mass": (0.60, 1.00),  # 200% of max training bound
+    "act_efficiency": (0.30, 0.60),  # Simulating severely broken thrusters
+    "pos_noise_std": (0.20, 0.50),  # Catastrophic sensor failure
+    "vel_noise_std": (0.10, 0.20),
+    "ang_noise_std": (0.05, 0.10),
+}
+
 CDR_WINDOW_SIZE = 20
 CDR_EXPAND_THRESHOLD = 0.40
 CDR_CONTRACT_THRESHOLD = 0.20
@@ -68,7 +82,7 @@ CDR_CONTRACT_STEP = 0.03
 class AUVDomainRandomWrapper(Wrapper):
     """
     Domain Randomisation wrapper for HalcyonAUVEnv.
-    Supports 'none', 'uniform', and 'curriculum' modes.
+    Supports 'none', 'uniform', 'curriculum' modes, and targeted ablation.
     """
 
     VALID_MODES = ("none", "uniform", "curriculum")
@@ -84,6 +98,7 @@ class AUVDomainRandomWrapper(Wrapper):
         cdr_expand_step: float = CDR_EXPAND_STEP,
         cdr_contract_step: float = CDR_CONTRACT_STEP,
         verbose: bool = True,
+        ablation_param: str = "none",  # Added for the Ablation Study
     ):
         super().__init__(env)
 
@@ -93,6 +108,7 @@ class AUVDomainRandomWrapper(Wrapper):
         self.mode = mode
         self.verbose = verbose
         self.rng = np.random.default_rng(seed)
+        self.ablation_param = ablation_param
 
         self._cdr_window_size = cdr_window_size
         self._cdr_expand_threshold = cdr_expand_threshold
@@ -111,6 +127,7 @@ class AUVDomainRandomWrapper(Wrapper):
         self._last_episode_was_success: bool = False
         self._last_dr_params: Dict[str, float] = {}
         self._test_mode: bool = False
+        self._extreme_test_mode: bool = False
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
@@ -144,8 +161,15 @@ class AUVDomainRandomWrapper(Wrapper):
         return obs, reward, terminated, truncated, info
 
     def _apply_dr(self) -> Dict[str, float]:
+        if self._extreme_test_mode:
+            return self._sample_and_apply(EXTREME_TEST_CONFIG)
         if self._test_mode:
             return self._sample_and_apply(TEST_PARAM_CONFIG)
+
+        # INTERCEPT: If an ablation parameter is set, ONLY randomize that parameter
+        if self.ablation_param != "none":
+            return self._apply_ablation()
+
         if self.mode == "none":
             return self._apply_nominal()
         if self.mode == "uniform":
@@ -156,8 +180,37 @@ class AUVDomainRandomWrapper(Wrapper):
             return self._sample_and_apply(ranges)
         return {}
 
+    def _apply_ablation(self) -> Dict[str, float]:
+        """Isolates a single physics parameter for the sim-to-real ablation study."""
+        r = self.rng
+        core = self.env.unwrapped
+        p = core.physics_params
+        param = self.ablation_param
+
+        # Only randomize the specific target parameter using max Uniform DR bounds
+        if param in PARAM_CONFIG:
+            cfg = PARAM_CONFIG[param]
+            val = float(r.uniform(cfg["min_lo"], cfg["max_hi"]))
+
+            if param in ["c_drag_lateral", "c_drag_axial"]:
+                p[param] = val
+            elif param == "buoyancy_offset":
+                p["buoyancy_offset"] = val
+            elif param == "current_speed":
+                direction = r.standard_normal(3)
+                direction /= np.linalg.norm(direction) + 1e-8
+                p["current_velocity"] = (direction * val).astype(np.float32)
+            elif param == "added_mass":
+                p["added_mass_coeff"] = val
+            elif param == "act_efficiency":
+                eff = r.uniform(cfg["min_lo"], cfg["max_hi"], size=4).astype(np.float32)
+                p["actuator_efficiency"] = eff
+
+        # Use the existing nominal logic to package the state neatly for logging
+        return self._apply_nominal()
+
     def _apply_nominal(self) -> Dict[str, float]:
-        """Reach down to core physics and return nominal values."""
+        """Reach down to core physics and return current nominal values."""
         core = self.env.unwrapped
         p = core.physics_params
         return {
@@ -283,6 +336,13 @@ class AUVDomainRandomWrapper(Wrapper):
     def unset_test_distribution(self):
         self._test_mode = False
 
+    def set_extreme_test_distribution(self):
+        self._extreme_test_mode = True
+        self._test_mode = False
+
+    def unset_extreme_test_distribution(self):
+        self._extreme_test_mode = False
+
     @property
     def curriculum_level(self) -> float:
         return self._curriculum_level
@@ -295,7 +355,7 @@ class AUVDomainRandomWrapper(Wrapper):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SB3 Callbacks & Factory Functions (Restored)
+# SB3 Callbacks & Factory Functions
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -356,10 +416,17 @@ def make_training_callbacks(
     return CallbackList(callbacks)
 
 
-def make_auv_env(xml_path: str, mode: str = "curriculum", seed: Optional[int] = None):
+def make_auv_env(
+    xml_path: str,
+    mode: str = "curriculum",
+    seed: Optional[int] = None,
+    ablation_param: str = "none",
+):
     """Original factory for static goal task."""
     base = HalcyonAUVEnv(xml_path=xml_path)
-    return AUVDomainRandomWrapper(base, mode=mode, seed=seed)
+    return AUVDomainRandomWrapper(
+        base, mode=mode, seed=seed, ablation_param=ablation_param
+    )
 
 
 def make_tracking_env(
@@ -367,12 +434,15 @@ def make_tracking_env(
     mode: str = "curriculum",
     seed: Optional[int] = None,
     path_speed: float = 0.3,
+    ablation_param: str = "none",
 ):
     """Factory for figure-8 tracking task."""
     from auv_tracking_env import HalcyonAUVTrackingEnv
 
     base = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=path_speed)
-    return AUVDomainRandomWrapper(base, mode=mode, seed=seed)
+    return AUVDomainRandomWrapper(
+        base, mode=mode, seed=seed, ablation_param=ablation_param
+    )
 
 
 def make_obstacle_env(
@@ -380,24 +450,32 @@ def make_obstacle_env(
     mode: str = "curriculum",
     seed: Optional[int] = None,
     n_obstacles: int = 5,
+    ablation_param: str = "none",
 ):
     """Factory for obstacle avoidance task."""
     from auv_obstacle_env import ObstacleAUVWrapper
 
     base = HalcyonAUVEnv(xml_path=xml_path)
     obs_env = ObstacleAUVWrapper(base, n_obstacles=n_obstacles)
-    return AUVDomainRandomWrapper(obs_env, mode=mode, seed=seed)
+    return AUVDomainRandomWrapper(
+        obs_env, mode=mode, seed=seed, ablation_param=ablation_param
+    )
 
 
 def make_master_env(
-    xml_path: str, mode: str = "curriculum", seed: Optional[int] = None
+    xml_path: str,
+    mode: str = "curriculum",
+    seed: Optional[int] = None,
+    ablation_param: str = "none",
 ):
     """Factory for the Grand Challenge: Tracking + Obstacles."""
     from auv_tracking_env import HalcyonAUVTrackingEnv
     from auv_obstacle_env import ObstacleAUVWrapper
 
-    # FIX: Hardcode 0.3 instead of the undefined path_speed variable
     base = HalcyonAUVTrackingEnv(xml_path=xml_path, path_speed=0.3)
     return AUVDomainRandomWrapper(
-        ObstacleAUVWrapper(base, n_obstacles=5), mode=mode, seed=seed
+        ObstacleAUVWrapper(base, n_obstacles=5),
+        mode=mode,
+        seed=seed,
+        ablation_param=ablation_param,
     )

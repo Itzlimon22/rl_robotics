@@ -113,23 +113,8 @@ SAC_HYPERPARAMS = {
     "gamma": 0.99,  # discount factor
     "train_freq": 1,  # update every step (off-policy, efficient)
     "gradient_steps": 1,
-    # BUG 1 FIX: "auto_0.1" instead of "auto".
-    # "auto" initialises entropy coefficient too low, causing it to collapse
-    # to near-zero before the agent has learned a useful policy.
-    # "auto_0.1" sets a higher initial value, maintaining exploration during
-    # the critical early phase of training (steps 0 to ~300k).
     "ent_coef": "auto_0.1",
-    # BUG 2 FIX: -1.0 instead of "auto".
-    # SB3 "auto" default: target_entropy = -dim(action_space) = -4.
-    # -4 is too aggressive — it drives the entropy coefficient to near-zero
-    # very rapidly, eliminating exploration. The agent then exploits a bad
-    # locally optimal policy for the rest of training.
-    # -1.0 keeps entropy meaningfully positive, ensuring continued exploration.
     "target_entropy": -1.0,
-    # BUG 3 FIX: gradient clipping added.
-    # max_grad_norm=1.0 prevents large gradient updates from destabilising
-    # the critic network. Particularly important early in training when the
-    # replay buffer contains mostly random rollout data with high variance.
     "policy_kwargs": dict(
         net_arch=[256, 256],
         activation_fn=torch.nn.ReLU,
@@ -222,23 +207,27 @@ def resolve_xml_path(xml_arg: Optional[str]) -> Path:
 
 
 def make_train_env(
-    xml_path: str, mode: str, seed: int, cdr_window_size: int = 50
+    xml_path: str,
+    mode: str,
+    seed: int,
+    cdr_window_size: int = 50,
+    ablation_param: str = "none",
 ) -> VecNormalize:
     """
     Create the VecNormalize-wrapped training environment.
 
     Stack: HalcyonAUVEnv → AUVDomainRandomWrapper → DummyVecEnv → VecNormalize
-
-    VecNormalize normalises observations and rewards online using running
-    statistics. This is critical for SAC convergence on this task — raw
-    observations span very different scales ([0,20] for distance vs [-1,1]
-    for actions vs [-pi,pi] for angles).
     """
 
     def _init():
         env = HalcyonAUVEnv(xml_path=xml_path)
         env = AUVDomainRandomWrapper(
-            env, mode=mode, seed=seed, cdr_window_size=cdr_window_size, verbose=True
+            env,
+            mode=mode,
+            seed=seed,
+            cdr_window_size=cdr_window_size,
+            verbose=True,
+            ablation_param=ablation_param,
         )
         return env
 
@@ -260,37 +249,21 @@ def make_eval_env(
     seed: int,
     vec_normalize: VecNormalize,
     cdr_window_size: int = 50,
+    ablation_param: str = "none",
 ) -> VecNormalize:
     """
     Create evaluation environment sharing VecNormalize statistics with training env.
-
-    Critical SB3 pattern for correct evaluation:
-        1. Create fresh VecNormalize on eval env (do NOT reuse training env object)
-        2. Copy obs_rms and ret_rms references from training env
-           (these are Python objects — reference copy means eval env always
-           uses the CURRENT training env statistics, updated each training step)
-        3. Set training=False → freeze statistics during evaluation
-        4. Set norm_reward=False → raw rewards for interpretable eval metrics
-
-    Why copy running stats?
-        The eval env must normalise observations the same way as the training env.
-        If the eval env uses different statistics, the model sees observations in
-        a different distribution than it was trained on → artificially bad eval.
-
-    Note: VecNormalize.load_from_venv() does NOT exist in SB3.
-    This manual obs_rms copy is the correct pattern.
     """
 
     def _init():
         env = HalcyonAUVEnv(xml_path=xml_path)
-        # Eval env uses same DR mode — evaluates on same distribution as training.
-        # For held-out test distribution evaluation, use eval.py separately.
         env = AUVDomainRandomWrapper(
             env,
             mode=mode,
             seed=seed + 1000,
             cdr_window_size=cdr_window_size,
             verbose=False,
+            ablation_param=ablation_param,
         )
         return env
 
@@ -303,7 +276,6 @@ def make_eval_env(
         gamma=SAC_HYPERPARAMS["gamma"],
     )
     # Copy observation running stats so normalisation matches training env.
-    # These are object references — eval env automatically uses current train stats.
     eval_vec.obs_rms = vec_normalize.obs_rms
     eval_vec.ret_rms = vec_normalize.ret_rms
     eval_vec.training = False  # freeze — do not update stats during evaluation
@@ -316,24 +288,7 @@ def make_eval_env(
 
 
 class AUVMetricsCallback(BaseCallback):
-    """
-    Log AUV-specific metrics to TensorBoard every step.
-
-    Captures from the info dict returned by AUVDomainRandomWrapper.step():
-        goal_dist           → env/goal_dist         (primary learning signal)
-        speed               → env/auv_speed
-        r_progress etc.     → reward/r_*            (reward components)
-        dr/curriculum_level → cdr/curriculum_level  (CDR expansion progress)
-        dr/success_rate     → cdr/rolling_success_rate
-        dr/c_drag_lateral   → cdr/c_drag_lateral    (sampled physics params)
-        dr/current_speed    → cdr/current_speed
-        dr/buoyancy         → cdr/buoyancy
-
-    These metrics are visible in TensorBoard and are used to monitor:
-        - Whether goal_dist is trending down (learning happening)
-        - Whether curriculum_level is increasing (CDR expanding correctly)
-        - Whether reward components are balanced
-    """
+    """Log AUV-specific metrics to TensorBoard every step."""
 
     def __init__(self, verbose: int = 0):
         super().__init__(verbose)
@@ -344,18 +299,15 @@ class AUVMetricsCallback(BaseCallback):
         dones = self.locals.get("dones", [False])
 
         for info, done in zip(infos, dones):
-            # Environment metrics
             if "goal_dist" in info:
                 self.logger.record_mean("env/goal_dist", info["goal_dist"])
             if "speed" in info:
                 self.logger.record_mean("env/auv_speed", info["speed"])
 
-            # Reward components (all logged for debugging reward shaping)
             for key in ["r_progress", "r_energy", "r_smooth", "r_orient", "r_boundary"]:
                 if key in info:
                     self.logger.record_mean(f"reward/{key}", info[key])
 
-            # CDR metrics (only populated when mode=curriculum)
             if "dr/curriculum_level" in info:
                 self.logger.record_mean(
                     "cdr/curriculum_level", info["dr/curriculum_level"]
@@ -371,8 +323,6 @@ class AUVMetricsCallback(BaseCallback):
             if "dr/buoyancy" in info:
                 self.logger.record_mean("cdr/buoyancy", info["dr/buoyancy"])
 
-            # Episode count (for phase plots)
-
             if done:
                 self._n_episodes += 1
                 goal_dist_at_done = info.get("goal_dist", 999)
@@ -384,26 +334,7 @@ class AUVMetricsCallback(BaseCallback):
 
 
 class CDRCheckpointCallback(BaseCallback):
-    """
-    Save CDR curriculum state alongside model checkpoints.
-
-    Called every CHECKPOINT_FREQ steps. Saves a JSON file with:
-        - curriculum_level: current expansion level [0, 1]
-        - n_episodes: total episodes elapsed
-        - n_successes: total successful episodes
-        - cdr_ranges: current [lo, hi] for each physics parameter
-        - outcome_window: last W episode outcomes (True=success)
-
-    These checkpoints allow:
-        1. Inspecting curriculum progress mid-training
-        2. Resuming training from a checkpoint
-        3. Verifying CDR is expanding correctly
-
-    Usage to inspect mid-training:
-        import json
-        state = json.load(open("cdr_state_500000.json"))
-        print(state["curriculum_level"])  # should be > 0 if CDR working
-    """
+    """Save CDR curriculum state alongside model checkpoints."""
 
     def __init__(self, save_dir: Path, save_freq: int, verbose: int = 1):
         super().__init__(verbose)
@@ -418,9 +349,7 @@ class CDRCheckpointCallback(BaseCallback):
         return True
 
     def _save_cdr_state(self):
-        """Extract CDR state from env wrapper chain and save to JSON."""
         try:
-            # Navigate wrapper chain: VecNormalize → DummyVecEnv → AUVDomainRandomWrapper
             env = self.training_env.venv.envs[0]
             if hasattr(env, "get_cdr_state"):
                 state = env.get_cdr_state()
@@ -444,21 +373,7 @@ class CDRCheckpointCallback(BaseCallback):
 
 
 def train(args: argparse.Namespace):
-    """
-    Full training pipeline. Called by main() or directly from Colab.
-
-    Steps:
-        1. Detect device (CUDA/MPS/CPU)
-        2. Resolve XML and save paths
-        3. Save config.json for reproducibility
-        4. Build training and eval environments
-        5. Initialise SAC model with fixed hyperparameters
-        6. Register callbacks (metrics, eval, checkpoint, CDR)
-        7. Run model.learn() for args.steps timesteps
-        8. Save final model, VecNormalize stats, CDR state
-    """
-
-    # ── Setup ─────────────────────────────────────────────────────────────────
+    """Full training pipeline."""
     t_start = time.time()
     device = detect_device()
 
@@ -466,7 +381,6 @@ def train(args: argparse.Namespace):
     print(f"[env]  XML: {xml_path}")
     print(f"[run]  mode={args.mode}  seed={args.seed}  steps={args.steps:,}")
 
-    # Run name: mode_seed for paper experiments, or custom for debug
     run_name = args.run_name or f"{args.mode}_seed{args.seed}_{int(time.time())}"
     save_dir = resolve_save_dir(args.mode, run_name, args.save_dir)
     tb_dir = save_dir / "tensorboard"
@@ -474,7 +388,6 @@ def train(args: argparse.Namespace):
     tb_dir.mkdir(parents=True, exist_ok=True)
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save full config for reproducibility — critical for paper experiments
     config = vars(args)
     config.update(
         {
@@ -489,16 +402,21 @@ def train(args: argparse.Namespace):
         json.dump(config, f, indent=2)
     print(f"[run]  Config saved → {save_dir / 'config.json'}")
 
-    # ── Environments ──────────────────────────────────────────────────────────
     print("\n[env]  Building training environment...")
-    train_env = make_train_env(str(xml_path), args.mode, args.seed, args.cdr_window)
+    train_env = make_train_env(
+        str(xml_path), args.mode, args.seed, args.cdr_window, args.ablation_param
+    )
 
     print("[env]  Building eval environment...")
     eval_env = make_eval_env(
-        str(xml_path), args.mode, args.seed, train_env, args.cdr_window
+        str(xml_path),
+        args.mode,
+        args.seed,
+        train_env,
+        args.cdr_window,
+        args.ablation_param,
     )
 
-    # ── Model ─────────────────────────────────────────────────────────────────
     hyperparams = dict(SAC_HYPERPARAMS)
     hyperparams["tensorboard_log"] = str(tb_dir)
 
@@ -518,16 +436,15 @@ def train(args: argparse.Namespace):
         f"target_entropy: {hyperparams['target_entropy']}  "
     )
 
-    # ── Callbacks ─────────────────────────────────────────────────────────────
     metrics_cb = AUVMetricsCallback(verbose=0)
 
     eval_cb = EvalCallback(
         eval_env,
-        best_model_save_path=str(save_dir),  # saves best_model.zip here
+        best_model_save_path=str(save_dir),
         log_path=str(eval_dir),
         eval_freq=EVAL_FREQ,
         n_eval_episodes=N_EVAL_EPS,
-        deterministic=True,  # deterministic policy during eval
+        deterministic=True,
         render=False,
         verbose=1,
     )
@@ -536,7 +453,7 @@ def train(args: argparse.Namespace):
         save_freq=CHECKPOINT_FREQ,
         save_path=str(save_dir / "checkpoints"),
         name_prefix="model",
-        save_vecnormalize=True,  # saves VecNormalize alongside each checkpoint
+        save_vecnormalize=True,
         verbose=1,
     )
 
@@ -548,11 +465,12 @@ def train(args: argparse.Namespace):
 
     callbacks = CallbackList([metrics_cb, eval_cb, checkpoint_cb, cdr_ckpt_cb])
 
-    # ── Training ──────────────────────────────────────────────────────────────
     print(f"\n{'=' * 60}")
     print(f"  TRAINING: mode={args.mode}  seed={args.seed}")
     print(f"  Steps: {args.steps:,}  |  Eval every {EVAL_FREQ:,} steps")
     print(f"  Save:  {save_dir}")
+    if args.ablation_param != "none":
+        print(f"  ABLATION TARGET: {args.ablation_param}")
     print(f"{'=' * 60}\n")
 
     try:
@@ -566,12 +484,10 @@ def train(args: argparse.Namespace):
     except KeyboardInterrupt:
         print("\n[train] Interrupted — saving current state...")
 
-    # ── Save final artifacts ──────────────────────────────────────────────────
     print("\n[save] Saving final model and VecNormalize stats...")
     model.save(str(save_dir / "final_model"))
     train_env.save(str(save_dir / "vec_normalize.pkl"))
 
-    # Save final CDR state
     try:
         env = train_env.venv.envs[0]
         if hasattr(env, "get_cdr_state"):
@@ -585,7 +501,6 @@ def train(args: argparse.Namespace):
     except Exception as e:
         print(f"[save] Warning: CDR state not saved: {e}")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     elapsed = time.time() - t_start
     print(f"\n{'=' * 60}")
     print(f"  DONE — {args.steps:,} steps in {elapsed / 60:.1f} min")
@@ -655,6 +570,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="Curriculum domain randomisation: rolling window size for success rate tracking.",
+    )
+    # Added for Ablation Study
+    p.add_argument(
+        "--ablation-param",
+        type=str,
+        default="none",
+        help="Specific physics parameter to randomize (for ablation study)",
     )
     return p
 

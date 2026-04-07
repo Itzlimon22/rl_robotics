@@ -104,6 +104,7 @@ def evaluate_sac(
     n_episodes: int = 100,
     use_hard_test: bool = False,
     use_obstacle: bool = False,
+    use_extreme_test: bool = False,
     seed: int = 9999,
     verbose: bool = True,
 ) -> Dict:
@@ -139,7 +140,12 @@ def evaluate_sac(
             env = ObstacleAUVWrapper(env)
 
         wrapper = AUVDomainRandomWrapper(env, mode=mode, seed=seed, verbose=False)
-        wrapper._sample_and_apply(test_config)
+
+        # Apply extreme test conditions if requested
+        if use_extreme_test:
+            wrapper.set_extreme_test_distribution()
+        else:
+            wrapper._sample_and_apply(test_config)
         return wrapper
 
     vec_env = DummyVecEnv([make_env])
@@ -151,14 +157,17 @@ def evaluate_sac(
 
     if verbose:
         label = "HARD test" if use_hard_test else "TEST"
+        if use_extreme_test:
+            label = "EXTREME (200% bounds)"
         print(
             f"[eval] Model loaded. Running {n_episodes} episodes on {label} distribution..."
         )
         cfg = test_config
-        print(
-            f"[eval] Test ranges: drag_lateral={cfg['c_drag_lateral']}, "
-            f"current={cfg['current_speed']}"
-        )
+        if not use_extreme_test:
+            print(
+                f"[eval] Test ranges: drag_lateral={cfg['c_drag_lateral']}, "
+                f"current={cfg['current_speed']}"
+            )
 
     episode_rewards, episode_dists = [], []
     episode_energies, episode_lengths, peak_thrusts = [], [], []
@@ -227,6 +236,7 @@ def evaluate_pid(
     n_episodes: int = 100,
     use_hard_test: bool = False,
     use_obstacle: bool = False,
+    use_extreme_test: bool = False,
     seed: int = 9999,
     kp: float = 20.0,
     verbose: bool = True,
@@ -246,6 +256,10 @@ def evaluate_pid(
     MAX_STEPS = 1000
 
     test_config = HARD_TEST_PARAM_CONFIG if use_hard_test else TEST_PARAM_CONFIG
+    if use_extreme_test:
+        from auv_dr_wrapper import EXTREME_TEST_CONFIG
+
+        test_config = EXTREME_TEST_CONFIG
     rng = np.random.default_rng(seed)
 
     episode_rewards, episode_dists = [], []
@@ -447,6 +461,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--kp", type=float, default=20.0, help="Proportional gain for PID controller"
     )
+    p.add_argument(
+        "--extreme-test",
+        action="store_true",
+        help="Use 2x out-of-distribution parameters to test sim-to-real proxy bounds.",
+    )
     return p
 
 
@@ -460,7 +479,10 @@ def main():
     print(f"[eval] XML:      {xml_path}")
     print(f"[eval] Base dir: {base_dir}")
     print(f"[eval] Episodes: {args.episodes}")
-    print(f"[eval] Test dist: {'HARD' if args.hard_test else 'standard'}")
+    if args.extreme_test:
+        print(f"[eval] Test dist: EXTREME (200% bounds)")
+    else:
+        print(f"[eval] Test dist: {'HARD' if args.hard_test else 'standard'}")
     if args.master:
         print(f"[eval] Master run execution enabled.")
     if args.obstacle:
@@ -474,6 +496,7 @@ def main():
             n_episodes=args.episodes,
             use_hard_test=args.hard_test,
             use_obstacle=args.obstacle,
+            use_extreme_test=args.extreme_test,
             kp=args.kp,
             verbose=True,
         )
@@ -512,6 +535,7 @@ def main():
                 n_episodes=args.episodes,
                 use_hard_test=args.hard_test,
                 use_obstacle=args.obstacle,
+                use_extreme_test=args.extreme_test,
                 seed=9999 + seed,
                 verbose=True,
             )

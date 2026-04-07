@@ -70,14 +70,18 @@ def find_run_dir(base, mode, seed):
     raise FileNotFoundError(f"No run found: {mode} seed{seed}")
 
 
-def make_tracking_env(xml_path, seed):
+def make_tracking_env(xml_path, seed, use_extreme_test=False):
     """
     Build tracking environment.
     Falls back to goal-reaching if auv_tracking_env.py not available.
     """
     try:
         from auv_tracking_env import HalcyonAUVTrackingEnv
-        from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
+        from auv_dr_wrapper import (
+            AUVDomainRandomWrapper,
+            TEST_PARAM_CONFIG,
+            EXTREME_TEST_CONFIG,
+        )
 
         def _init():
             env = HalcyonAUVTrackingEnv(
@@ -88,7 +92,10 @@ def make_tracking_env(xml_path, seed):
             wrapper = AUVDomainRandomWrapper(
                 env, mode="uniform", seed=seed + 9999, verbose=False
             )
-            wrapper._sample_and_apply(TEST_PARAM_CONFIG)
+            if use_extreme_test:
+                wrapper.set_extreme_test_distribution()
+            else:
+                wrapper._sample_and_apply(TEST_PARAM_CONFIG)
             return wrapper
 
         return DummyVecEnv([_init]), "tracking"
@@ -98,20 +105,27 @@ def make_tracking_env(xml_path, seed):
         print("[eval_tracking] WARNING: auv_tracking_env.py not found")
         print("[eval_tracking] Using goal-reaching env as fallback")
         from auv_env import HalcyonAUVEnv
-        from auv_dr_wrapper import AUVDomainRandomWrapper, TEST_PARAM_CONFIG
+        from auv_dr_wrapper import (
+            AUVDomainRandomWrapper,
+            TEST_PARAM_CONFIG,
+            EXTREME_TEST_CONFIG,
+        )
 
         def _init():
             env = HalcyonAUVEnv(xml_path=str(xml_path))
             wrapper = AUVDomainRandomWrapper(
                 env, mode="uniform", seed=seed + 9999, verbose=False
             )
-            wrapper._sample_and_apply(TEST_PARAM_CONFIG)
+            if use_extreme_test:
+                wrapper.set_extreme_test_distribution()
+            else:
+                wrapper._sample_and_apply(TEST_PARAM_CONFIG)
             return wrapper
 
         return DummyVecEnv([_init]), "goal_reaching"
 
 
-def evaluate_tracking(mode, seed, n_episodes=N_EPISODES):
+def evaluate_tracking(mode, seed, n_episodes=N_EPISODES, use_extreme_test=False):
     base = resolve_base()
     xml_path = find_xml()
     run_dir = find_run_dir(base, mode, seed)
@@ -119,7 +133,9 @@ def evaluate_tracking(mode, seed, n_episodes=N_EPISODES):
     print(f"\n[eval_tracking] Mode: {mode}  Seed: {seed}")
     print(f"[eval_tracking] Run dir: {run_dir}")
 
-    vec_env, env_type = make_tracking_env(xml_path, seed)
+    vec_env, env_type = make_tracking_env(
+        xml_path, seed, use_extreme_test=use_extreme_test
+    )
 
     # Load VecNormalize
     vn_path = run_dir / "vec_normalize.pkl"
@@ -144,13 +160,19 @@ def evaluate_tracking(mode, seed, n_episodes=N_EPISODES):
         # The model may have been trained with a different obs size
         # Load without env to get raw predictions
         model = SAC.load(str(run_dir / "best_model"))
-        vec_env, env_type = make_tracking_env(xml_path, seed)
+        vec_env, env_type = make_tracking_env(
+            xml_path, seed, use_extreme_test=use_extreme_test
+        )
         if vn_path.exists():
             vec_env = VecNormalize.load(str(vn_path), vec_env)
             vec_env.training = False
             vec_env.norm_reward = False
 
     print(f"[eval_tracking] Env type: {env_type}")
+    if use_extreme_test:
+        print(
+            f"[eval_tracking] WARNING: Evaluating under EXTREME zero-shot conditions (200% bounds)!"
+        )
     print(f"[eval_tracking] Running {n_episodes} episodes...\n")
 
     # ── Evaluation loop ──────────────────────────────────────────
@@ -249,6 +271,11 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--all", action="store_true", help="Eval all 3 tracking runs")
     p.add_argument("--episodes", type=int, default=N_EPISODES)
+    p.add_argument(
+        "--extreme-test",
+        action="store_true",
+        help="Use 2x out-of-distribution parameters to test sim-to-real proxy bounds.",
+    )
     args = p.parse_args()
 
     N_EPISODES = args.episodes
@@ -256,13 +283,17 @@ def main():
     if args.all:
         for mode in ["tracking_none", "tracking_uniform", "tracking_curriculum"]:
             try:
-                evaluate_tracking(mode, 0, args.episodes)
+                evaluate_tracking(
+                    mode, 0, args.episodes, use_extreme_test=args.extreme_test
+                )
             except Exception as e:
                 print(f"\n[eval_tracking] ERROR {mode}: {e}")
     else:
         if args.mode is None:
             p.error("Provide --mode or --all")
-        evaluate_tracking(args.mode, args.seed, args.episodes)
+        evaluate_tracking(
+            args.mode, args.seed, args.episodes, use_extreme_test=args.extreme_test
+        )
 
 
 if __name__ == "__main__":
