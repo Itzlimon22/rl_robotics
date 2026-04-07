@@ -125,7 +125,9 @@ def make_tracking_env(xml_path, seed, use_extreme_test=False):
         return DummyVecEnv([_init]), "goal_reaching"
 
 
-def evaluate_tracking(mode, seed, n_episodes=N_EPISODES, use_extreme_test=False):
+def evaluate_tracking(
+    mode, seed, n_episodes=N_EPISODES, use_extreme_test=False, save_path=None
+):
     base = resolve_base()
     xml_path = find_xml()
     run_dir = find_run_dir(base, mode, seed)
@@ -253,7 +255,11 @@ def evaluate_tracking(mode, seed, n_episodes=N_EPISODES, use_extreme_test=False)
     print(f"  Energy/step:      {results['mean_energy_per_step']:.4f}")
     print(f"{'=' * 55}")
 
-    out = run_dir / "tracking_eval_results.json"
+    if save_path:
+        out = Path(save_path)
+    else:
+        out = run_dir / "tracking_eval_results.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\n[eval_tracking] Saved → {out}")
@@ -276,6 +282,12 @@ def main():
         action="store_true",
         help="Use 2x out-of-distribution parameters to test sim-to-real proxy bounds.",
     )
+    p.add_argument(
+        "--save",
+        type=str,
+        default=None,
+        help="Optional explicit path to save the JSON results.",
+    )
     args = p.parse_args()
 
     N_EPISODES = args.episodes
@@ -284,7 +296,11 @@ def main():
         for mode in ["tracking_none", "tracking_uniform", "tracking_curriculum"]:
             try:
                 evaluate_tracking(
-                    mode, 0, args.episodes, use_extreme_test=args.extreme_test
+                    mode,
+                    0,
+                    args.episodes,
+                    use_extreme_test=args.extreme_test,
+                    save_path=args.save,
                 )
             except Exception as e:
                 print(f"\n[eval_tracking] ERROR {mode}: {e}")
@@ -292,7 +308,11 @@ def main():
         if args.mode is None:
             p.error("Provide --mode or --all")
         evaluate_tracking(
-            args.mode, args.seed, args.episodes, use_extreme_test=args.extreme_test
+            args.mode,
+            args.seed,
+            args.episodes,
+            use_extreme_test=args.extreme_test,
+            save_path=args.save,
         )
 
 

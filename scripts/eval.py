@@ -388,11 +388,20 @@ def print_results(results: Dict):
     print(f"{'=' * 55}")
 
 
-def save_results(results: Dict, save_path: Path):
+def save_results(
+    results: Dict, save_path: Optional[Path], args_save_override: Optional[str] = None
+):
     """Saves evaluation metrics to JSON for visualization scripts."""
-    with open(save_path, "w") as f:
+    # Use explicit override path if provided via CLI
+    if args_save_override:
+        final_path = Path(args_save_override)
+    else:
+        final_path = save_path
+
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(final_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\n[eval] Saved → {save_path}")
+    print(f"\n[eval] Saved → {final_path}")
 
 
 def print_summary_table(all_results: List[Dict]):
@@ -466,6 +475,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use 2x out-of-distribution parameters to test sim-to-real proxy bounds.",
     )
+    p.add_argument(
+        "--save",
+        type=str,
+        default=None,
+        help="Optional explicit path to save the JSON results.",
+    )
     return p
 
 
@@ -501,7 +516,7 @@ def main():
             verbose=True,
         )
         print_results(results)
-        save_results(results, base_dir / "pid_test_eval_results.json")
+        save_results(results, base_dir / "pid_test_eval_results.json", args.save)
         return
 
     if args.all:
@@ -543,7 +558,7 @@ def main():
             results["run_name"] = run_dir.name
             results["target_mode"] = target_mode
             print_results(results)
-            save_results(results, run_dir / "test_eval_results.json")
+            save_results(results, run_dir / "test_eval_results.json", args.save)
             all_results.append(results)
         except Exception as e:
             print(f"\n[eval] ERROR {target_mode} seed{seed}: {e}")
@@ -553,7 +568,11 @@ def main():
 
     if len(all_results) > 1:
         print_summary_table(all_results)
-        out = base_dir / "eval_summary.json"
+        if args.save:
+            out = Path(args.save)
+        else:
+            out = base_dir / "eval_summary.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
         with open(out, "w") as f:
             json.dump(all_results, f, indent=2)
         print(f"[eval] Summary saved → {out}")
