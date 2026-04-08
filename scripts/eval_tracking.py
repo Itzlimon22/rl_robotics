@@ -357,19 +357,22 @@ def main():
 
     if args.run_name:
         # Custom run name provided — evaluate single custom run
-        # Extract mode from run_name if possible (e.g., tracking_curriculum from tracking_curriculum_cdr_w25_seed0)
-        # Otherwise use the run_name as-is under the base/tracking_<mode>/ directory
+        # Mode can be explicitly provided with --mode, or inferred from run_name
 
-        # Try to infer mode from run_name
-        mode = None
-        for m in ["tracking_curriculum", "tracking_uniform", "tracking_none"]:
-            if m in args.run_name:
-                mode = (
-                    "tracking_curriculum"
-                    if "curriculum" in m
-                    else ("tracking_uniform" if "uniform" in m else "tracking_none")
-                )
-                break
+        # If --mode is explicitly provided, use it
+        # Otherwise try to infer mode from run_name (e.g., tracking_curriculum from tracking_curriculum_cdr_w25_seed0)
+        mode = args.mode
+
+        if not mode:
+            # Try to infer mode from run_name
+            for m in ["tracking_curriculum", "tracking_uniform", "tracking_none"]:
+                if m in args.run_name:
+                    mode = (
+                        "tracking_curriculum"
+                        if "curriculum" in m
+                        else ("tracking_uniform" if "uniform" in m else "tracking_none")
+                    )
+                    break
 
         if not mode:
             print("[eval_tracking] ERROR: Could not infer mode from --run-name.")
