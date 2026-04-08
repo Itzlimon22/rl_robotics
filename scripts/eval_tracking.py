@@ -311,8 +311,10 @@ def main():
     p.add_argument(
         "--lookahead",
         type=float,
+        nargs="?",
+        const=1.0,
         default=None,
-        help="Lookahead time (informational, for filename annotation)",
+        help="Lookahead time in seconds (informational). Use --lookahead alone for default 1.0s, or --lookahead 2.5 for custom value.",
     )
     p.add_argument(
         "--extreme-test",
@@ -322,12 +324,16 @@ def main():
     p.add_argument(
         "--save",
         type=str,
+        nargs="?",
+        const="auto",
         default=None,
         help="Optional explicit path to save the JSON results.",
     )
     p.add_argument(
         "--save-results",
         type=str,
+        nargs="?",
+        const="auto",
         default=None,
         help="(Alternative to --save) Explicit path to save the JSON results.",
     )
@@ -342,7 +348,12 @@ def main():
         base = resolve_base()
 
     # Determine save path (--save-results takes precedence over --save)
-    save_path = args.save_results or args.save
+    # If "auto" const value is used, treat as None for default behavior
+    save_path = None
+    if args.save_results and args.save_results != "auto":
+        save_path = args.save_results
+    elif args.save and args.save != "auto":
+        save_path = args.save
 
     if args.run_name:
         # Custom run name provided — evaluate single custom run
