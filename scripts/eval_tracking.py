@@ -62,7 +62,18 @@ def find_xml():
     raise FileNotFoundError("auv.xml not found")
 
 
-def find_run_dir(base, mode, seed):
+def find_run_dir(base, mode, seed, run_name=None):
+    """Find run directory. If run_name provided, use it directly. Otherwise search for mode_seedN."""
+    if run_name:
+        # Direct custom run name: look for base/mode/run_name
+        rd = base / mode / run_name
+        if rd.exists() and (rd / "best_model.zip").exists():
+            return rd
+        raise FileNotFoundError(
+            f"Custom run not found: {rd}. Check --run-name and --base-dir."
+        )
+
+    # Original search logic: look for mode_seedN with optional suffixes
     for suffix in ["_v1", ""]:
         rd = base / mode / f"{mode}_seed{seed}{suffix}"
         if rd.exists() and (rd / "best_model.zip").exists():
@@ -273,10 +284,36 @@ def main():
         "--mode",
         default=None,
         choices=["tracking_none", "tracking_uniform", "tracking_curriculum"],
+        help="Training mode (only used if --run-name not provided)",
     )
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed (only used if --run-name not provided)",
+    )
     p.add_argument("--all", action="store_true", help="Eval all 3 tracking runs")
-    p.add_argument("--episodes", type=int, default=N_EPISODES)
+    p.add_argument(
+        "--episodes", type=int, default=N_EPISODES, help="Number of evaluation episodes"
+    )
+    p.add_argument(
+        "--base-dir",
+        type=str,
+        default=None,
+        help="Base directory for tracking runs (overrides auto-detection)",
+    )
+    p.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Custom run name (e.g., 'tracking_curriculum_cdr_w25_seed0'). Overrides --mode/--seed.",
+    )
+    p.add_argument(
+        "--lookahead",
+        type=float,
+        default=None,
+        help="Lookahead time (informational, for filename annotation)",
+    )
     p.add_argument(
         "--extreme-test",
         action="store_true",
@@ -288,11 +325,64 @@ def main():
         default=None,
         help="Optional explicit path to save the JSON results.",
     )
+    p.add_argument(
+        "--save-results",
+        type=str,
+        default=None,
+        help="(Alternative to --save) Explicit path to save the JSON results.",
+    )
     args = p.parse_args()
 
     N_EPISODES = args.episodes
 
-    if args.all:
+    # Resolve base directory
+    if args.base_dir:
+        base = Path(args.base_dir)
+    else:
+        base = resolve_base()
+
+    # Determine save path (--save-results takes precedence over --save)
+    save_path = args.save_results or args.save
+
+    if args.run_name:
+        # Custom run name provided — evaluate single custom run
+        # Extract mode from run_name if possible (e.g., tracking_curriculum from tracking_curriculum_cdr_w25_seed0)
+        # Otherwise use the run_name as-is under the base/tracking_<mode>/ directory
+
+        # Try to infer mode from run_name
+        mode = None
+        for m in ["tracking_curriculum", "tracking_uniform", "tracking_none"]:
+            if m in args.run_name:
+                mode = (
+                    "tracking_curriculum"
+                    if "curriculum" in m
+                    else ("tracking_uniform" if "uniform" in m else "tracking_none")
+                )
+                break
+
+        if not mode:
+            print("[eval_tracking] ERROR: Could not infer mode from --run-name.")
+            print(
+                "[eval_tracking] Provide --mode or ensure run_name contains 'curriculum', 'uniform', or 'none'."
+            )
+            return
+
+        try:
+            run_dir = find_run_dir(base, mode, args.seed, run_name=args.run_name)
+            print(f"\n[eval_tracking] Evaluating custom run: {args.run_name}")
+            if args.lookahead:
+                print(f"[eval_tracking] Lookahead time: {args.lookahead}s")
+            evaluate_tracking(
+                mode,
+                args.seed,
+                args.episodes,
+                use_extreme_test=args.extreme_test,
+                save_path=save_path,
+            )
+        except FileNotFoundError as e:
+            print(f"\n[eval_tracking] ERROR: {e}")
+    elif args.all:
+        # Evaluate all 3 standard tracking runs
         for mode in ["tracking_none", "tracking_uniform", "tracking_curriculum"]:
             try:
                 evaluate_tracking(
@@ -300,20 +390,24 @@ def main():
                     0,
                     args.episodes,
                     use_extreme_test=args.extreme_test,
-                    save_path=args.save,
+                    save_path=save_path,
                 )
             except Exception as e:
                 print(f"\n[eval_tracking] ERROR {mode}: {e}")
     else:
+        # Evaluate single standard run by mode and seed
         if args.mode is None:
-            p.error("Provide --mode or --all")
-        evaluate_tracking(
-            args.mode,
-            args.seed,
-            args.episodes,
-            use_extreme_test=args.extreme_test,
-            save_path=args.save,
-        )
+            p.error("Provide --mode, --run-name, or --all")
+        try:
+            evaluate_tracking(
+                args.mode,
+                args.seed,
+                args.episodes,
+                use_extreme_test=args.extreme_test,
+                save_path=save_path,
+            )
+        except FileNotFoundError as e:
+            print(f"\n[eval_tracking] ERROR: {e}")
 
 
 if __name__ == "__main__":
