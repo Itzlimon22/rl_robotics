@@ -1,0 +1,29 @@
+%% Section 5.6 in paper/sections/results.tex
+
+\subsection{Ablation: Which Physics Parameter Drives the Gap?}
+\label{sec:ablation}
+
+Table~\ref{tab:ablation} presents results when only one physics parameter
+is randomised at a time under Uniform DR, with all others fixed at
+nominal values.
+Lateral drag randomisation alone achieves
+$[FILL:abl_drag_sr]\% \pm [FILL:abl_drag_std]\%$ transfer success,
+the highest single-parameter performance.
+This is consistent with lateral drag's quadratic velocity dependence
+and its direct coupling with water current: the combined effect of
+elevated drag and current load produces the largest out-of-distribution
+force.
+
+Water current randomisation alone achieves
+$[FILL:abl_current_sr]\% \pm [FILL:abl_current_std]\%$, the second
+largest contribution.
+Actuator efficiency ($[FILL:abl_eff_sr]\%$), added mass
+($[FILL:abl_mass_sr]\%$), and buoyancy ($[FILL:abl_buoy_sr]\%$)
+contribute smaller but non-negligible transfer benefits.
+
+Randomising any single parameter outperforms Naive SAC
+($[FILL:sr_naive]\%$), confirming that even partial DR is beneficial.
+However, all single-parameter conditions fall below Uniform DR
+($[FILL:sr_udr]\%$), demonstrating that parameters jointly cover
+distinct aspects of the sim-to-real gap that no single parameter
+captures alone.
