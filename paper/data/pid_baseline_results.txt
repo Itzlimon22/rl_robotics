@@ -1,0 +1,28 @@
+
+================================================================================
+FINAL RESULT: CLASSICAL PID BASELINE (GRAND CHALLENGE)
+================================================================================
+DATE: April 8, 2026
+TOPIC: Master + Obstacle Avoidance under HARD Sim-to-Real Distribution
+
+1. THE EXPERIMENT:
+- A classical PID controller was evaluated on the Grand Challenge (100 episodes).
+- Environment included 23-dimensional obstacle detection and 'HARD' parameter bounds 
+  (lateral drag and water currents pushed to sim-to-real proxy limits).
+
+2. THE RESULT:
+- Success Rate: 8.0% (8/100 episodes)
+- Mean Distance to Goal: 7.81m ± 4.30m (Failed to reach 0.5m threshold)
+- Mean Energy per Step: 0.8583 ± 0.1143
+- Peak Thrust: 1.0000 (Constant actuator saturation)
+
+3. HOW TO USE THIS IN THE PAPER:
+- [Results/Comparison]: "Under complex hydrodynamic disturbances and obstacle 
+  avoidance constraints, the classical PID baseline suffered a catastrophic failure 
+  rate (8.0% success), terminating an average of 7.81 meters away from the target."
+- [Discussion/Energy]: "The PID controller demonstrated severe actuator saturation 
+  (peak thrust 1.0) and high energy consumption (0.858 energy/step) as it attempted 
+  to linearly fight the unmodeled water currents. In contrast, the Curriculum DR 
+  agent successfully utilized the non-linear dynamics, achieving a significantly 
+  higher survival rate while consuming far less energy."
+================================================================================

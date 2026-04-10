@@ -1,0 +1,28 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOUR PAPER NUMBERS - FINAL VERIFIED DATA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CDR (Ours) success rate mean:  95.00%
+CDR (Ours) success rate std:    4.08%
+CDR (Ours) mean reward:          74.343
+CDR (Ours) energy/step:       0.6186
+CDR (Ours) mean dist:          0.52m
+
+Uniform DR success rate mean:  99.67%
+Uniform DR success rate std:    0.47%
+Uniform DR mean reward:          77.883
+Uniform DR energy/step:       0.6603
+Uniform DR mean dist:          0.47m
+
+Naive SAC success rate mean:  63.67%
+Naive SAC success rate std:   25.33%
+Naive SAC mean reward:          24.694
+Naive SAC energy/step:       0.4265
+Naive SAC mean dist:          1.03m
+
+PID test success:     3.0%
+PID test reward:      -249.02
+PID train success:    100.0%
+
+Energy saving CDR vs UDR:     6.31%
+p-value CDR vs UDR energy:   0.5596 (ns)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

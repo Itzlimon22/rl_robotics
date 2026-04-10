@@ -1,0 +1,22 @@
+% paper/tables/table_hyperparams.tex
+\begin{table}[t]
+\centering
+\caption{SAC hyperparameters (identical for all three conditions).}
+\label{tab:hyperparams}
+\begin{tabular}{ll}
+\hline
+\textbf{Hyperparameter} & \textbf{Value} \\
+\hline
+Learning rate            & $3 \times 10^{-4}$ \\
+Replay buffer size       & $500{,}000$ \\
+Batch size               & $256$ \\
+Discount factor $\gamma$ & $0.99$ \\
+Network architecture     & MLP $[256, 256]$, ReLU \\
+Entropy coefficient      & Auto-tuned~\cite{haarnoja2018soft} \\
+Soft update rate $\tau$  & $0.005$ \\
+Training steps           & $1{,}000{,}000$ \\
+Learning starts          & $10{,}000$ \\
+Obs. normalisation       & VecNormalize (clip $= 10$) \\
+\hline
+\end{tabular}
+\end{table}

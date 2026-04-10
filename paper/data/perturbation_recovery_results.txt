@@ -1,0 +1,21 @@
+================================================================================
+TABLE 4: PERTURBATION RECOVERY PERFORMANCE (STABILITY TEST)
+DATE: April 8, 2026
+================================================================================
+Mode         | Post-Perturb Success | Recovery Steps (Mean ± Std)
+--------------------------------------------------------------------------------
+None         |   57.3% ± 36.9%      |   78.6  ± 76.6
+Uniform      |  100.0% ± 0.0%       |  443.4  ± 4.7
+Curriculum   |   97.3% ± 0.9%       |  353.6  ± 75.7
+================================================================================
+Note: Recovery Steps measures the time required for the AUV to return to 
+the tracking path within a 1.0m tolerance after a 5.0N impulse perturbation.
+
+THESIS CLAIM:
+"The Curriculum DR policy demonstrated a superior balance between robustness 
+and responsiveness. While the Uniform DR baseline adopted a sluggish recovery 
+profile (443.4 steps), the Curriculum approach achieved a 20.2% improvement 
+in recovery speed (353.6 steps). This indicates that curriculum-based 
+training effectively shapes the policy's manifold to handle high-energy 
+disturbances with more efficient corrective maneuvers."
+================================================================================

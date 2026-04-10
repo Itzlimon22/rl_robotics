@@ -1,0 +1,24 @@
+================================================================================
+FINAL RESULT: ENERGY EFFICIENCY COMPARISON (PID vs. CDR)
+================================================================================
+DATE: April 8, 2026
+TOPIC: Energy Consumption in Extreme Sim-to-Real Proxy
+
+1. THE EXPERIMENT:
+- Compared the mean energy per step of the classical PID baseline against the 
+  Curriculum Domain Randomization (CDR) agent over the 100-episode Grand Challenge.
+
+2. THE DATA:
+- PID Baseline Energy/Step: 0.8583 (at 8.0% success rate)
+- CDR Agent Energy/Step:    0.5704 (at 100.0% success rate)
+
+3. THE MULTIPLIER:
+- The PID controller consumes 1.5x MORE energy than the CDR agent.
+
+4. HOW TO USE THIS IN THE PAPER:
+- [Primary Claim]: "The PID baseline utilizes 1.5x more energy than the CDR agent."
+- [Discussion]: "While the PID controller consistently saturated its actuators 
+  (fighting the unmodeled currents), the CDR agent learned a highly efficient 
+  control policy, utilizing 1.5x less energy while simultaneously solving the 
+  obstacle avoidance and trajectory tracking task."
+================================================================================

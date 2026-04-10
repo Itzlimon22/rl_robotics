@@ -1,0 +1,41 @@
+
+================================================================================
+TABLE 1: ENERGY EFFICIENCY AND THRUST PROFILE (MASTER TEST CONDITIONS)
+DATE: April 7, 2026
+================================================================================
+Condition                 | Energy/Step (Mean±Std) | Peak Thrust | Avg Ep Length
+--------------------------------------------------------------------------------
+Naive SAC (Baseline)      | 0.4712 ± 0.120         | 0.7331      | 362.2
+Uniform DR                | 0.6612 ± 0.041         | 0.7353      | 165.4
+CDR (Ours)                | 0.5673 ± 0.034         | 0.9979      | 326.9
+PID Baseline              | 0.8642                 | 1.0000      | 409.0
+================================================================================
+Note: Energy/Step represents the normalized action magnitude. PID operates 
+deterministically, hence no standard deviation is reported.
+
+
+================================================================================
+TABLE 2: MID-EPISODE PERTURBATION RECOVERY ANALYSIS
+DATE: April 7, 2026
+================================================================================
+Training Strategy         | Post-Perturb Success   | Recovery Time (Steps)
+--------------------------------------------------------------------------------
+Naive SAC (Baseline)      |  57.3% ± 36.9%         |  78.6 ± 76.6
+Uniform DR                | 100.0% ± 0.0%          | 443.4 ± 4.7
+CDR (Ours)                |  97.3% ± 0.9%          | 353.6 ± 75.7
+================================================================================
+Note: Perturbation applies a random impulsive force mid-trajectory. Naive SAC's 
+low recovery time is an artifact of task failure (it often fails quickly rather 
+than recovering).
+
+================================================================================
+TABLE 3: FINAL ENERGY EFFICIENCY (PLAIN TEXT)
+================================================================================
+Condition                 | Mean E/step | Peak Thrust | Ep Length
+--------------------------------------------------------------------------------
+Naive SAC (Baseline)      | 0.4265      | 0.9587      | 301.8
+Uniform DR                | 0.6603      | 0.9692      | 84.3
+CDR (Ours)                | 0.6186      | 0.9732      | 114.6
+PID Baseline              | 0.8642      | 1.0000      | 409.0
+================================================================================
+

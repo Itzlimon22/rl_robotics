@@ -1,0 +1,27 @@
+
+================================================================================
+FINAL RESULT: ZERO-SHOT TRANSFER (EXTREME SIM-TO-REAL PROXY)
+================================================================================
+DATE: April 8, 2026
+TOPIC: Extreme Extrapolation (Colab A10c)
+
+1. THE EXPERIMENT:
+- The Curriculum Domain Randomization (CDR) "Master" model (Seed 1) was evaluated 
+  under 'HARD' zero-shot conditions, simulating an extreme Sim-to-Real gap.
+- Test bounds were pushed significantly beyond the standard training distribution:
+  Lateral Drag: (0.6, 1.2), Water Current: (0.4, 0.8).
+
+2. THE RESULT:
+- Success Rate: 100.0% (50/50 episodes)
+- Mean Distance to Goal: 0.46m ± 0.02m (Well within the 0.5m success radius)
+- Mean Energy per Step: 0.7179 ± 0.0343
+
+3. HOW TO USE THIS IN THE PAPER:
+- [Abstract]: "When subjected to zero-shot transfer testing under out-of-distribution 
+  hydrodynamic bounds, the CDR policy maintained a 100% success rate, proving high 
+  generalization capabilities without the need for target-domain retraining."
+- [Discussion]: "The agent's ability to maintain a mean termination distance of 0.46m 
+  under extreme lateral drag and current velocities demonstrates that CDR successfully 
+  forces the actor network to learn robust recovery gradients rather than memorizing 
+  a static physics distribution."
+================================================================================

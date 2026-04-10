@@ -1,0 +1,39 @@
+================================================================================
+DETAILED EXTREME OOD TRANSFER EVALUATION SUMMARY
+================================================================================
+
+[ METHOD: CURRICULUM DR ]
+----------------------------------------
+Success Rate        : 46.0% (23/50)
+Mean Reward         : 7.69 % 60.79
+Mean Distance       : 2.57m
+Energy per Step     : 0.6902
+Peak Thrust         : 0.9988
+Avg Episode Length  : 352.7 steps
+Test Distribution   : standard
+Seed                : 1
+================================================================================
+
+[ METHOD: UNIFORM DR ]
+----------------------------------------
+Success Rate        : 54.0% (27/50)
+Mean Reward         : 18.04 % 57.66
+Mean Distance       : 1.91m
+Energy per Step     : 0.7146
+Peak Thrust         : 0.9936
+Avg Episode Length  : 306.8 steps
+Test Distribution   : standard
+Seed                : 1
+================================================================================
+
+[ METHOD: NAIVE SAC (NONE) ]
+----------------------------------------
+Success Rate        : 30.0% (15/50)
+Mean Reward         : -58.82 % 105.99
+Mean Distance       : 5.73m
+Energy per Step     : 0.4482
+Peak Thrust         : 0.9781
+Avg Episode Length  : 360.5 steps
+Test Distribution   : standard
+Seed                : 1
+================================================================================

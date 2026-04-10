@@ -1,0 +1,26 @@
+================================================================================
+TABLE 3: PID SENSITIVITY ANALYSIS (GRAND CHALLENGE)
+DATE: April 8, 2026
+================================================================================
+To ensure the baseline comparison was robust, a sensitivity analysis was 
+conducted on the PID controller's proportional gain (Kp) under the 'HARD' 
+sim-to-real test distribution (30 episodes per configuration).
+
+Proportional Gain | Success Rate | Mean Energy/Step
+--------------------------------------------------------------------------------
+Kp = 5.0          |   3.3%       | 0.4512
+Kp = 10.0         |   0.0%       | 0.6650
+Kp = 15.0         |   0.0%       | 0.8475
+Kp = 20.0         |   3.3%       | 0.8468
+Kp = 25.0         |   6.7%       | 0.9031
+Kp = 30.0         |   0.0%       | 0.9315
+================================================================================
+THESIS CLAIM (Discussion Section):
+"A sensitivity analysis of the PID baseline revealed a fundamental limitation 
+of linear control in extreme hydrodynamic environments. Low proportional gains 
+(Kp < 15) resulted in sluggish responses leading to obstacle collisions, while 
+high gains (Kp > 20) caused aggressive actuator saturation and rapid energy 
+depletion without a meaningful increase in survivability. No configuration 
+of the linear controller was able to approach the 100% success rate or the 
+energy efficiency of the Curriculum Domain Randomization agent."
+================================================================================

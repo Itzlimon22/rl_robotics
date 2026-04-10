@@ -1,0 +1,17 @@
+% paper/tables/table_cdr_params.tex
+\begin{table}[t]
+\centering
+\caption{CDR hyperparameters.}
+\label{tab:cdr_params}
+\begin{tabular}{lll}
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\hline
+$W$           & 50       & Rolling success window length \\
+$\tau^+$      & 0.70     & Expand threshold \\
+$\tau^-$      & 0.40     & Contract threshold \\
+$\varepsilon_+$ & 0.05   & Expand step (fraction of full range) \\
+$\varepsilon_-$ & 0.03   & Contract step \\
+\hline
+\end{tabular}
+\end{table}
