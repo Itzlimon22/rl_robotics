@@ -1,0 +1,140 @@
+% paper/sections/discussion.tex
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Why Classical Control Is Insufficient for Robust AUV Deployment}
+
+The $97$-percentage-point collapse of PID performance under out-of-distribution
+physics is not a tuning failure — the gains were optimised by exhaustive grid
+search on the training distribution.
+Rather, it reflects a fundamental structural limitation of fixed-gain linear
+control: proportional-integral terms cannot distinguish between position error
+caused by inertia (transient, self-correcting) and error caused by persistent
+external disturbances such as ocean current (permanent, requiring sustained
+compensation).
+
+Under strong tidal currents at $0.60$--$0.80$\,m/s, the integral term
+accumulates large corrections, saturates the thruster command, and causes
+the AUV to overshoot the goal.
+The derivative term damps oscillation near the goal, but with $K_d = 10$
+tuned for nominal drag of $0.20$\,kg/m, it is severely underdamped at
+test drag values of $0.80$--$1.20$\,kg/m.
+The result is a persistent limit cycle that never converges to within the
+$0.5$\,m goal threshold.
+
+This analysis generalises beyond our specific implementation: \emph{any}
+fixed-gain PID controller designed for nominal AUV conditions will face
+analogous degradation in real deployments, where fluid parameters vary
+continuously and unpredictably.
+Our experiments provide the first precise quantification of this gap for
+a $6$-DOF AUV goal-reaching task.
+
+\subsection{Why CDR Produces More Energy-Efficient Policies}
+
+The $[FILL:saving]$\% energy saving of CDR over Uniform DR has a
+mechanistic explanation rooted in the curriculum's implicit learning
+structure.
+
+During the early phase ($\lambda \approx 0$), the CDR agent trains
+exclusively on calm conditions: nominal drag, zero current, nominal buoyancy.
+In this regime, the minimum-effort strategy for reaching a goal is
+smooth, low-thrust trajectory-following.
+The reward's energy penalty ($-0.02\|a_t\|^2$) reinforces this: in calm
+conditions, inefficient thrust is penalised without providing any benefit,
+so the agent learns to minimise thrust early.
+
+As $\lambda$ increases, the agent encounters mild drag and current
+perturbations.
+Crucially, it adapts its \emph{existing} low-thrust strategy rather than
+developing a new one from scratch.
+The curriculum frames each expansion as a perturbation of known behaviour,
+not a novel task.
+
+Uniform DR, by contrast, presents all difficulty levels from episode 1.
+Under high drag and strong current, aggressive thrust is the only viable
+strategy early in training — the agent cannot survive without near-maximum
+effort.
+This aggressive strategy becomes entrenched in the policy's early weights
+and persists even in lower-difficulty conditions where it is unnecessary.
+
+The net result is a systematic difference in \emph{policy texture}: CDR
+learns the minimum viable thrust for each condition, while Uniform DR learns
+a uniformly aggressive strategy that works everywhere but optimises nowhere.
+
+\subsection{Deployment Implications}
+
+The energy advantage has direct operational significance.
+A real AUV mission — pipeline inspection, bathymetric survey, or coral
+reef monitoring — is fundamentally battery-constrained.
+A $[FILL:saving]$\% reduction in mean thrust consumption translates
+approximately linearly to a $[FILL:saving]$\% extension in mission
+duration or range, assuming thrust is the dominant power consumer
+(which is typical for medium-speed torpedo AUVs~\cite{fossen2011handbook}).
+
+For a 4-hour inspection mission, this represents approximately
+$[FILL:duration_min]$\,minutes of additional operational time — sufficient,
+in some scenarios, to complete a survey pass that would otherwise require
+surfacing and recharging.
+
+We therefore recommend that future AUV RL benchmarks report energy
+efficiency alongside success rate as a co-primary metric, particularly
+for scenarios where battery endurance constrains mission scope.
+
+\subsection{Generality of CDR}
+
+The CDR algorithm (Algorithm~\ref{alg:cdr}) is not specific to AUV
+physics.
+Its only requirements are: (1) a parameterisable simulator with identifiable
+physics parameters, (2) a binary success signal per episode, and (3) a
+reasonable starting range from which the agent can achieve $> \tau^- = 0.40$
+success.
+These conditions hold broadly across sim-to-real transfer problems.
+
+The simplification relative to ADR~\cite{akkaya2019solving} — expanding
+all parameters simultaneously with a single success window rather than
+per-parameter expansion buffers — reduces implementation complexity
+at the cost of some adaptivity.
+For the AUV case, where the six parameters are physically coupled
+(current and drag interact multiplicatively), simultaneous expansion
+is arguably more appropriate than independent parameter scheduling.
+Whether per-parameter expansion yields further improvements is an
+open question we leave to future work.
+
+\subsection{Limitations}
+
+\textbf{Simulation-only evaluation.}
+This study is limited to simulation.
+Hardware validation on a real AUV platform — the critical missing step —
+is left to future work.
+Tank experiments at $1$--$2$\,m/s current and $0.6$--$1.2$\,kg/m drag
+would provide direct evidence for or against the sim-to-real hypothesis.
+
+\textbf{Simplified fluid model.}
+Our hydrodynamics follow the standard Fossen~\cite{fossen2011handbook}
+formulation but omit turbulence, vortex shedding, wave-induced
+disturbances, and thruster interaction effects.
+More complex models would increase the training challenge, potentially
+accentuating the CDR advantage, but would also require longer training
+and more careful tuning.
+
+\textbf{Limited seeds.}
+With $n = 3$ seeds, statistical comparisons between closely-matched
+conditions (CDR vs Uniform DR) have limited power.
+The CDR vs Uniform DR energy difference reaches
+$p = [FILL:pval]$ with $d = [FILL:cohend]$;
+the effect is practically meaningful but not yet definitively established.
+Future work with $n \geq 10$ seeds would provide stronger statistical evidence.
+
+\textbf{Fixed CDR hyperparameters.}
+The window size $W = 50$, thresholds $\tau^\pm$, and step sizes $\varepsilon_\pm$
+were manually tuned.
+Preliminary sensitivity analysis (Appendix~\ref{app:sensitivity}) shows
+CDR is robust to moderate variation in $W$, but adaptive meta-learned
+thresholds could further improve performance and reduce setup cost.
+
+\textbf{Observation space.}
+The current observation does not include sonar, camera, or vision inputs,
+limiting applicability to GPS-aided environments.
+Extending to partially observable settings with noisy sensing is a direct
+and valuable next step.

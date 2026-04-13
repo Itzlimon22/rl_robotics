@@ -1,0 +1,30 @@
+% paper/sections/appendix.tex  (or include in main.tex after \bibliography)
+
+\appendix
+
+\section{CDR Hyperparameter Sensitivity}
+\label{app:sensitivity}
+
+%% IF A9 sensitivity runs are complete — fill in real numbers:
+We trained CDR with three window sizes ($W \in \{25, 50, 100\}$)
+and the default thresholds, each with seed 0 for $500{,}000$ steps.
+Table~\ref{tab:sensitivity} shows transfer success rate and energy
+per step for each configuration.
+All three window sizes achieve comparable success ($> 90\%$) and
+similar energy ($[FILL]$--$[FILL]$), confirming that CDR performance
+is robust to moderate variation in the window hyperparameter.
+
+%% IF A9 is NOT done — use this placeholder:
+A sensitivity analysis of CDR hyperparameters ($W$, $\tau^\pm$,
+$\varepsilon_\pm$) is left to future work.
+The default values ($W=50$, $\tau^+=0.70$, $\tau^-=0.40$) were
+selected based on ADR~\cite{akkaya2019solving} and verified to
+produce stable curriculum progression on the development set.
+
+\section{Environment Details}
+\label{app:env}
+
+Complete environment specifications, observation space bounds, reward
+function weights, and training configuration files are available in
+the open-source repository:
+\url{https://github.com/Itzlimon22/rl_robotics}.

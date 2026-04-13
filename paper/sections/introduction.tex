@@ -1,0 +1,77 @@
+% paper/sections/introduction.tex
+
+\section{Introduction}
+\label{sec:intro}
+
+A PID controller carefully tuned for nominal AUV physics achieves
+$100\%$ success rate in simulation — and $3\%$ when the same fluid
+parameters shift by a modest, ocean-realistic amount.
+This single result, demonstrated quantitatively in
+Section~\ref{sec:pid_results}, encapsulates the central challenge of
+autonomous underwater vehicle (AUV) deployment: controllers optimised
+for nominal conditions are insufficient when drag, buoyancy, and water
+current vary with biofouling, salinity gradients, and tidal variation —
+as they invariably do in the real ocean.
+
+Reinforcement learning (RL) trained with domain randomisation (DR) offers
+a principled solution: by varying physics parameters across training
+episodes, policies generalise to the distribution of conditions they
+will encounter in deployment~\cite{tobin2017domain,peng2018simtoreal}.
+Several recent works have applied SAC and DR to AUV control with
+promising results~\cite{arndt2024learning,chu2025marinegym,chaffre2025simtoreal}.
+However, standard Uniform DR — sampling uniformly from fixed parameter
+ranges throughout training — exposes the agent simultaneously to easy
+and hard conditions from the first episode.
+We show this produces policies with high inter-seed variance
+($60.7\% \pm 27.2\%$ without DR), making deployment reliability uncertain.
+
+A natural improvement is to schedule the difficulty of DR, beginning
+with narrow parameter ranges and expanding them as the agent learns to
+handle each level.
+OpenAI's Automatic Domain Randomisation~\cite{akkaya2019solving} applied
+this principle to dexterous manipulation with a robot hand.
+However, no prior work has applied curriculum DR to the qualitatively
+distinct problem of underwater fluid physics, where parameters are
+physically coupled through nonlinear quadratic drag, and no prior work
+has evaluated energy efficiency — a metric of direct operational
+significance for battery-constrained AUVs.
+
+We present \emph{Curriculum Domain Randomisation} (\CDR{}) for AUV
+fluid physics: a performance-gated strategy that starts from narrow
+physics ranges and expands them when a rolling success rate window
+exceeds a threshold.
+\CDR{} is inspired by ADR~\cite{akkaya2019solving} but simplified for
+underwater physics — expanding all six parameters simultaneously with a
+single shared success window, without per-parameter expansion buffers
+or Bayesian models.
+We compare \CDR{} against Naive SAC, Uniform DR, and a PID baseline
+across $9$ training runs ($3$ conditions $\times$ $3$ seeds $\times$
+$10^6$ steps) and evaluate zero-shot transfer to a held-out test
+distribution with elevated drag and strong currents.
+
+Our findings are threefold.
+First, PID control collapses catastrophically under fluid-parameter
+distribution shift ($100\% \to 3\%$ success), establishing a
+practical baseline for the value of physics-aware training.
+Second, any form of DR eliminates the $\pm 27.2\%$ deployment variance
+of unrobust policies, confirming that distribution coverage is
+necessary for reliable transfer.
+Third, \CDR{} produces policies that consume $[FILL:saving]\%$ less
+thrust energy per step than Uniform DR at comparable success rates —
+a practically meaningful saving for battery-constrained real AUVs
+where mission duration determines operational scope.
+
+\textbf{Contributions:}
+\begin{enumerate}
+\item The first systematic comparison of curriculum vs uniform DR
+  strategies for AUV fluid physics, demonstrating that CDR produces
+  more energy-efficient policies at comparable transfer success rates.
+\item A quantitative benchmark showing that PID control collapses from
+  $100\%$ to $3\%$ success under out-of-distribution fluid parameters —
+  establishing the practical necessity of physics-aware training for
+  real AUV deployment.
+\item An open-source MuJoCo AUV environment (\textit{Halcyon X4}) with
+  nine randomisable parameters (six physics $+$ three sensor noise),
+  released for reproducible underwater robotics research at
+  \url{https://github.com/Itzlimon22/rl_robotics}.
+\end{enumerate}

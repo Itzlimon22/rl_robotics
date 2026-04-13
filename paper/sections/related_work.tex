@@ -1,0 +1,78 @@
+% paper/sections/related_work.tex
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Domain Randomisation for Sim-to-Real Transfer}
+
+Domain randomisation (DR) trains policies across a distribution of simulated
+environments, with the hypothesis that the real world falls within the
+training distribution~\cite{tobin2017domain}.
+Tobin et al.~\cite{tobin2017domain} demonstrated visual DR for robotic
+object localisation, achieving zero-shot sim-to-real transfer purely from
+randomised rendered images.
+Peng et al.~\cite{peng2018simtoreal} extended DR to dynamics randomisation
+for legged locomotion, randomising mass, friction, and joint parameters.
+
+Adaptive approaches to DR — adjusting randomisation ranges during training —
+have shown further gains.
+OpenAI's Automatic Domain Randomisation (ADR)~\cite{akkaya2019solving}
+expands parameter boundaries when a per-parameter performance buffer
+indicates competence, enabling the learning of dexterous manipulation with
+132 randomised parameters.
+DORAEMON~\cite{tiboni2024doraemon} frames adaptive DR as entropy maximisation
+subject to a success rate constraint, using Bayesian optimisation to select
+parameter distributions.
+
+Our CDR algorithm adapts the ADR concept to underwater fluid physics,
+expanding all six parameters simultaneously using a single shared success
+window rather than per-parameter buffers.
+This simplification reduces the hyperparameter count and is appropriate
+for the AUV setting where parameters are physically coupled.
+Unlike ADR and DORAEMON, which target manipulation on ground-based systems,
+we apply curriculum DR to the qualitatively distinct parameter space of
+hydrodynamic forces, and we evaluate energy efficiency as a primary metric.
+
+\subsection{Reinforcement Learning for AUV Control}
+
+Deep RL has been applied to AUV station-keeping~\cite{carlucho2018},
+depth and heading control~\cite{shi2020survey}, and 3D navigation.
+Arndt et al.~\cite{arndt2024learning} demonstrated zero-shot sim-to-real
+transfer of a $6$-DOF AUV controller using SAC with Uniform DR on two
+physical parameters (centre of buoyancy and displaced volume), achieving
+performance comparable to hand-tuned PID on a real vehicle.
+Chaffre et al.~\cite{chaffre2025simtoreal} combined SAC with
+bio-inspired experience replay and enhanced Uniform DR for AUV
+station-keeping under current disturbances, with physical tank validation.
+
+MarineGym~\cite{chu2025marinegym} provides the most comprehensive
+underwater RL benchmark to date: GPU-accelerated simulation via
+NVIDIA Isaac Sim with five AUV models, three task types, and a
+Uniform DR toolkit.
+However, MarineGym does not study curriculum scheduling of DR,
+does not evaluate energy efficiency, and uses proprietary NVIDIA
+simulation rather than the open-source MuJoCo we employ.
+
+Neither Arndt et al.~\cite{arndt2024learning} nor
+Chaffre et al.~\cite{chaffre2025simtoreal} study curriculum DR or
+measure energy efficiency.
+No prior work quantifies the PID fragility gap under fluid-parameter
+distribution shift, which we show to be a $97$-percentage-point collapse.
+
+\subsection{Curriculum Learning and Self-Paced DR}
+
+Curriculum learning~\cite{bengio2009curriculum} — presenting training
+examples in order from easy to hard — has been shown to improve
+generalisation and convergence in supervised and reinforcement learning.
+Self-paced RL methods~\cite{klink2020selfpaced} adapt task difficulty
+to the current learner's capability, using contextual MDPs or target
+distributions.
+
+In the DR context, curriculum approaches that expand randomisation
+ranges over time have been explored primarily for manipulation and
+locomotion.
+Our work is, to our knowledge, the first to apply performance-gated
+curriculum DR to underwater fluid physics, and the first to demonstrate
+that curriculum scheduling produces policies with systematically lower
+energy consumption than Uniform DR — a result with direct practical
+significance for battery-constrained AUV deployment.

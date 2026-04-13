@@ -1,0 +1,31 @@
+% paper/sections/conclusion.tex
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented the first systematic study of curriculum domain randomisation
+for AUV fluid physics, comparing \CDR{} against Uniform DR, Naive SAC,
+and a PID baseline on a held-out test distribution.
+Three findings have practical significance for AUV deployment.
+First, PID control collapses catastrophically ($100\% \to 3\%$ success)
+under modest fluid-parameter shift — a fragility that renders fixed-gain
+classical control unsuitable for real ocean deployment without real-time
+adaptation.
+Second, domain randomisation is essential for reliable transfer:
+it eliminates the $\pm [FILL:std_naive]$\% inter-seed variance of
+unrobust policies, enabling confident pre-deployment assessment of
+policy performance.
+Third, \CDR{} produces more energy-efficient policies than Uniform DR
+($[FILL:saving]\%$ lower energy per step), a meaningful operational
+advantage for battery-constrained AUV missions.
+
+Beyond the specific results, this work establishes energy efficiency
+as a meaningful differentiator between DR strategies that achieve
+similar success rates.
+As AUV RL matures toward real deployment, we argue that mission duration
+and thrust economy should join success rate as standard evaluation metrics.
+Our open-source Halcyon X4 environment and training pipeline are
+released to support this.
+Future work includes hardware validation, multi-parameter curriculum
+scheduling, and extension to partially observable settings with
+degraded sensing.

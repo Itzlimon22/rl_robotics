@@ -1,0 +1,95 @@
+% paper/sections/experiments.tex
+
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Training Conditions}
+
+We compare four conditions evaluated on the same held-out test distribution:
+
+\textbf{PID baseline.}
+A three-axis proportional-integral-derivative controller with gains
+$K_p = 20$, $K_i = 0.1$, $K_d = 10$, anti-windup limit $8$\,rad/s,
+and goal threshold $0.8$\,m (wider than the $0.5$\,m RL threshold
+to account for integral oscillation near the goal).
+The PID requires no training and is evaluated directly on both the
+training and held-out test distributions to quantify classical control
+fragility.
+
+\textbf{Naive SAC.}
+SAC trained on fixed nominal physics with no randomisation ($|\Xi| = 1$).
+Tests whether RL alone, without distribution coverage, produces
+transfer-robust policies.
+
+\textbf{Uniform DR.}
+SAC trained with physics parameters sampled uniformly from the full
+training ranges (Table~\ref{tab:dr_ranges}) at every episode reset.
+This is the standard domain randomisation approach~\cite{tobin2017domain}.
+
+\textbf{CDR (ours).}
+SAC trained with performance-gated range expansion as described in
+Section~\ref{sec:cdr}. Begins from the narrow CDR start ranges in
+Table~\ref{tab:dr_ranges} and expands toward the Uniform DR ranges
+based on rolling success rate.
+
+\subsection{Training Protocol}
+
+Each SAC condition is trained for $1 \times 10^6$ environment steps
+across three independent random seeds (seeds 0, 1, 2), yielding nine
+main experiments.
+All conditions share identical SAC hyperparameters (Table~\ref{tab:hyperparams})
+and differ only in the physics distribution during training.
+Training uses a single NVIDIA T4 GPU on Google Colab and requires
+approximately 4.5 hours per run.
+Observations are normalised online using running mean and variance
+(VecNormalize~\cite{stable_baselines3}), with the statistics saved
+alongside each trained model and reloaded at evaluation time.
+
+\subsection{Evaluation Protocol}
+
+All policies are evaluated on a \emph{held-out test distribution}
+whose parameter ranges are strictly wider than those seen during training
+(Table~\ref{tab:dr_ranges}, rightmost column).
+No policy was trained on or fine-tuned with test-distribution data;
+all results represent zero-shot transfer.
+
+We run 100 evaluation episodes per seed per condition using deterministic
+policy rollout ($\arg\max$ action selection).
+Goal distance threshold is $0.5$\,m for all SAC conditions.
+We report four metrics:
+
+\begin{itemize}
+\item \textbf{Success rate}: fraction of episodes reaching the goal
+  within the distance threshold.
+\item \textbf{Mean reward}: mean undiscounted episode return $\pm$
+  standard deviation across seeds.
+\item \textbf{Energy per step}: mean absolute thruster command
+  $\frac{1}{T}\sum_t \|a_t\|_1 / 4 \in [0, 1]$,
+  proportional to battery energy consumption.
+\item \textbf{Mean final distance}: mean goal distance at episode end
+  $\pm$ standard deviation.
+\end{itemize}
+
+Statistical tests use Welch's $t$-test (unequal variance) with
+Cohen's $d$ effect size reported throughout.
+Bootstrap 95\% confidence intervals (1000 resamples) are reported
+where sample size ($n = 3$ seeds) limits statistical power.
+
+\subsection{Sensor Noise Extension}
+\label{sec:master_setup}
+
+We repeat the three-condition SAC comparison with sensor noise added
+to the DR parameter space:
+position noise $\sigma_p \in [0,\,0.10]$\,m,
+velocity noise $\sigma_v \in [0,\,0.05]$\,m/s,
+and angular velocity noise $\sigma_\omega \in [0,\,0.02]$\,rad/s.
+These represent realistic IMU and DVL sensor degradation.
+Results are reported in Section~\ref{sec:noise_results}.
+
+\subsection{Implementation}
+
+All environments use Gymnasium~\cite{gymnasium} with the MuJoCo~\cite{mujoco}
+physics backend.
+Policies are implemented using Stable-Baselines3~\cite{stable_baselines3}.
+Code and trained models are available at:
+\url{https://github.com/Itzlimon22/rl_robotics}.

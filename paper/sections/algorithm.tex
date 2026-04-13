@@ -1,0 +1,45 @@
+% Include this in paper/sections/method.tex after CDR description
+
+\begin{algorithm}[t]
+\caption{Curriculum Domain Randomisation (CDR)}
+\label{alg:cdr}
+\begin{algorithmic}[1]
+\Require Env, window $W$, thresholds $\tau^+, \tau^-$,
+         step sizes $\varepsilon_+, \varepsilon_-$,
+         param config $\{p: (\phi^\text{lo}_\text{min},
+         \phi^\text{lo}_\text{start},
+         \phi^\text{hi}_\text{start},
+         \phi^\text{hi}_\text{max})\}$
+\State $\text{ranges}[p] \gets (\phi^\text{lo}_\text{start},
+       \phi^\text{hi}_\text{start})$ for all $p$
+\State $\mathcal{W} \gets \emptyset$ \Comment{rolling window, capacity $W$}
+\For{each episode}
+  \State Sample $\phi_p \sim \text{Uniform}(\text{ranges}[p])$ for all $p$
+  \State Apply $\phi$ to environment; run episode; record $\text{success} \in \{0,1\}$
+  \State $\mathcal{W} \gets \mathcal{W} \cup \{\text{success}\}$;
+         discard oldest if $|\mathcal{W}| > W$
+  \If{$|\mathcal{W}| = W$}
+    \State $\hat{sr} \gets \text{mean}(\mathcal{W})$
+    \If{$\hat{sr} > \tau^+$} \Comment{Expand}
+      \ForAll{$p$}
+        \State $\phi^\text{lo}_p \gets \max(\phi^\text{lo}_\text{min},\;
+               \phi^\text{lo}_p - \varepsilon_+ \cdot
+               (\phi^\text{lo}_\text{start} - \phi^\text{lo}_\text{min}))$
+        \State $\phi^\text{hi}_p \gets \min(\phi^\text{hi}_\text{max},\;
+               \phi^\text{hi}_p + \varepsilon_+ \cdot
+               (\phi^\text{hi}_\text{max} - \phi^\text{hi}_\text{start}))$
+      \EndFor
+    \ElsIf{$\hat{sr} < \tau^-$} \Comment{Contract}
+      \ForAll{$p$}
+        \State $\phi^\text{lo}_p \gets \min(\phi^\text{lo}_\text{start},\;
+               \phi^\text{lo}_p + \varepsilon_- \cdot
+               (\phi^\text{lo}_\text{start} - \phi^\text{lo}_\text{min}))$
+        \State $\phi^\text{hi}_p \gets \max(\phi^\text{hi}_\text{start},\;
+               \phi^\text{hi}_p - \varepsilon_- \cdot
+               (\phi^\text{hi}_\text{max} - \phi^\text{hi}_\text{start}))$
+      \EndFor
+    \EndIf
+  \EndIf
+\EndFor
+\end{algorithmic}
+\end{algorithm}
