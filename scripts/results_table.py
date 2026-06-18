@@ -48,7 +48,14 @@ def load_metrics(mode, base_path):
                     / fn
                 )
                 p_standard = base_path / mode / f"{mode}_seed{seed}{suffix}" / fn
-                p = p_nested if p_nested.exists() else p_standard
+                p_master = base_path / f"master_{mode}" / f"master_{mode}_seed{seed}{suffix}" / fn
+                
+                if p_nested.exists():
+                    p = p_nested
+                elif p_master.exists():
+                    p = p_master
+                else:
+                    p = p_standard
 
                 if p.exists():
                     with open(p) as f:

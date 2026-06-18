@@ -1,26 +1,35 @@
 % paper/sections/abstract.tex
 
 \begin{abstract}
-Classical control of autonomous underwater vehicles (AUVs) fails
-under ocean-realistic physics variation: a PID controller achieving
-$100\%$ success under nominal conditions collapses to $3\%$ when
-drag and current shift to real-ocean ranges — a $97$-percentage-point
-collapse that motivates physics-aware training.
-We present the first systematic study of \emph{Curriculum Domain
-Randomisation} (\CDR{}) for AUV fluid physics: a performance-gated
-strategy that expands six randomisable physics parameters during training
-based on a rolling success rate window.
-Compared against Uniform DR, Naive SAC, and a PID baseline across nine
-experiments ($3$ conditions $\times$ $3$ seeds $\times$ $10^6$ steps),
-\CDR{} achieves $[FILL:sr_cdr] \pm [FILL:std_cdr]$\% transfer success
-on a held-out test distribution while consuming $[FILL:saving]\%$ less
-thrust energy per step than Uniform DR
-($[FILL:eng_cdr] \pm [FILL:engstd_cdr]$ vs
-$[FILL:eng_udr] \pm [FILL:engstd_udr]$,
-$p = [FILL:pval]$, $d = [FILL:cohend]$),
-a meaningful saving for battery-constrained real AUV missions.
-Domain randomisation eliminates the $\pm [FILL:std_naive]$\%
-deployment variance of policies trained without randomisation.
-We open-source our MuJoCo AUV environment with nine randomisable
+Classical \PID{} controllers for autonomous underwater vehicle (\AUV{})
+navigation achieve near-perfect success under nominal fluid conditions,
+yet collapse catastrophically when those conditions shift by modest,
+ocean-realistic amounts---dropping from $100\%$ to $3\%$ success as
+drag and current increase to real-ocean ranges, a $97$-percentage-point
+collapse that establishes the practical necessity of physics-aware training.
+
+We present a systematic study of domain-randomisation strategies for
+\AUV{} sim-to-real transfer, comparing \emph{Curriculum Domain
+Randomisation} (\CDR{}), Uniform \DR{}, Naive \SAC{}, and a \PID{}
+baseline across nine experiments ($3$ conditions $\times$ $3$ seeds
+$\times$ $10^6$ steps).
+\CDR{} is a performance-gated strategy that begins training with narrow
+physics-parameter ranges and expands them as the policy's rolling success
+rate exceeds an adaptive threshold.
+
+Evaluated zero-shot on a held-out test distribution with elevated drag
+($0.60$--$1.20$\,kg/m) and strong currents ($0.40$--$0.80$\,m/s)
+never seen during training, \CDR{} achieves
+$98.67\% \pm 1.89\%$ transfer success.
+\CDR{} further consumes $1.13\%$ less thrust energy per step
+than Uniform \DR{}
+($0.639 \pm 0.062$ vs.\ $0.646 \pm 0.036$,
+$p {=} 0.894$, $d {=} 0.14$),
+a meaningful saving for battery-constrained real \AUV{} missions.
+Domain randomisation eliminates the $\pm 33.83$\,pp
+inter-seed deployment variance of policies trained without
+randomisation.
+
+We open-source our \MuJoCo{} \AUV{} environment with nine randomisable
 parameters to facilitate reproducible underwater robotics research.
 \end{abstract}

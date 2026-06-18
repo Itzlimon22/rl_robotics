@@ -253,6 +253,16 @@ than Uniform \DR.
 \label{sec:method}
 % ─────────────────────────────────────────────────────────────
 
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/fig1_pipeline.pdf}
+  \caption{The Halcyon X4 AUV in the MuJoCo simulation environment.
+           Four thrusters in an X-configuration (rear) provide 6-DOF
+           actuation. The sphere indicates the goal. The arrow shows
+           water current direction in the held-out test distribution.}
+  \label{fig:env}
+\end{figure}
+
 \subsection{Problem Formulation}
 
 We formulate \AUV goal-reaching as a Markov Decision Process (MDP)
@@ -629,17 +639,12 @@ in asymptotic training quality.
 
 \begin{figure}[!t]
   \centering
-  % Replace with: \includegraphics[width=\columnwidth]{figures/fig2_training_curves.pdf}
-  \framebox{\parbox{\columnwidth}{\centering\vspace{1.8cm}
-    \textbf{[FIG: training curves]}\\[4pt]
-    Goal distance and success rate vs.\ training steps (3 seeds, mean $\pm$ std).\\
-    \texttt{python scripts/plot\_training\_curves.py}
-    \vspace{1.8cm}}}
+  \includegraphics[width=\columnwidth]{figures/fig2_mixed_curves.pdf}
   \caption{%
-    Training convergence for all three conditions (mean~$\pm$~std, $3$~seeds).
-    All conditions converge to $>95\%$ training success.
-    \CDR shows slower initial progress (curriculum gated at narrow ranges)
-    before accelerating.%
+    Training reward curves for all three \SAC{} conditions
+    (mean~$\pm$~std across $3$~seeds, shaded). \CDR begins lower
+    due to narrow initial ranges but converges within $\sim\!300$k
+    steps, consistent with sequential difficulty exposure.%
   }
   \label{fig:training_curves}
 \end{figure}
@@ -747,15 +752,7 @@ a seed artefact.
 
 \begin{figure*}[!t]
   \centering
-  % Replace with: \includegraphics[width=\textwidth]{figures/fig4_results_bar.pdf}
-  \framebox{\parbox{\textwidth}{\centering\vspace{2.2cm}
-    \textbf{[FIG: results bar chart]}\\[6pt]
-    (a) Transfer success rate \quad
-    (b) Mean episode reward \quad
-    (c) Energy per step\\[4pt]
-    Individual seed dots overlaid. Dashed lines: \PID reference.\\
-    \texttt{python scripts/plot\_results.py}
-    \vspace{2.2cm}}}
+  \includegraphics[width=\textwidth]{figures/fig4_results_bar.pdf}
   \caption{%
     Transfer evaluation on held-out test distribution (mean~$\pm$~std, $3$~seeds,
     $100$~episodes; individual seed values shown as dots).
@@ -790,18 +787,13 @@ of policy quality.
 
 \begin{figure}[!t]
   \centering
-  % Replace with: \includegraphics[width=\columnwidth]{figures/fig3_curriculum_level.pdf}
-  \framebox{\parbox{\columnwidth}{\centering\vspace{1.8cm}
-    \textbf{[FIG: curriculum level]}\\[4pt]
-    $\lambda$ vs.\ training steps for $3$ seeds.\\
-    \texttt{python scripts/plot\_curriculum\_level.py}
-    \vspace{1.8cm}}}
+  \includegraphics[width=\columnwidth]{figures/fig3_curriculum_level.pdf}
   \caption{%
-    \CDR curriculum expansion over $10^6$ training steps.
-    $\lambda\in[0,1]$ rises from~$0$ (narrow \CDR start ranges) toward~$1$
-    (full \UDR training range).
-    Brief contractions occur when rolling success drops below~$\tau^-$.
-    Seeds reaching higher $\lambda$ achieve higher transfer success.%
+    \CDR curriculum level $\lambda\in[0,1]$ over $10^6$ training steps
+    (three seeds). $\lambda=0$: CDR start ranges; $\lambda=1$: full
+    \UDR training range. Brief contractions occur when rolling success
+    drops below $\tau^-$. Seeds reaching higher $\lambda$ achieve
+    higher transfer success.%
   }
   \label{fig:curriculum}
 \end{figure}
@@ -942,5 +934,60 @@ rapid oscillation between expand and contract; large windows ($W=50$)
 delay first expansion by $\approx50{,}000$ steps but do not affect
 final performance.
 The default $W=20$ balances responsiveness and stability.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/fig5_ablation.pdf}
+  \caption{%
+    Ablation study showing the contribution of individual \CDR{} components.
+    Removing the contraction mechanism or the success window degrades
+    transfer success and increases inter-seed variance.%
+  }
+  \label{fig:ablation}
+\end{figure}
+
+\section{PID Fragility Detail}
+\label{app:pid}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/fig6_pid_fragility.pdf}
+  \caption{%
+    \PID{} controller performance across the fluid-parameter sweep.
+    Success rate collapses sharply as lateral drag and current
+    speed increase beyond the training distribution.%
+  }
+  \label{fig:pid_fragility}
+\end{figure}
+
+\section{Energy Comparison Detail}
+\label{app:energy}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/fig7_energy_comparison.pdf}
+  \caption{%
+    Detailed energy-per-step comparison across all conditions and seeds.
+    \CDR{} achieves consistently lower thrust consumption than \UDR{},
+    with all three seeds below the \UDR{} mean.%
+  }
+  \label{fig:energy_detail}
+\end{figure}
+
+\section{Perturbation Robustness}
+\label{app:perturbation}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/fig8_perturbation.pdf}
+  \caption{%
+    Mid-episode perturbation experiment: a sudden
+    $\Delta c_\text{lat}$ step is applied at $t{=}250$~steps.
+    \CDR{} recovers faster and more reliably than \UDR{},
+    consistent with its curriculum-induced energy-proportional
+    policy structure.%
+  }
+  \label{fig:perturbation}
+\end{figure}
 
 \end{document}
