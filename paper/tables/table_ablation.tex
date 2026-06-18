@@ -1,0 +1,15 @@
+% paper/tables/table_ablation.tex
+\begin{table}[t]
+\centering
+\caption{Ablation Study: Impact of omitting individual parameters from the Domain Randomization Curriculum. Evaluated on the held-out test distribution (3 seeds, 50 episodes each). Sorted by performance degradation.}
+\label{tab:ablation_results}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccc}
+\hline
+\textbf{Ablated Parameter} & \textbf{Success (\%)} & \textbf{Dist Error (m)} & \textbf{Energy/Step} \\
+\hline
+\textit{None (Full CDR)} & \textit{0.0 $\pm$ 0.0} & \textit{0.00} & \textit{0.000} \\
+\hline
+\hline
+\end{tabular}
+\end{table}

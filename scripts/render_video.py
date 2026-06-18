@@ -21,6 +21,10 @@ Usage:
     conda activate rl
     pip install "imageio[ffmpeg]"
 
+    # RECOMMENDED FOR PAPER: Close-up view showing AUV + thrusters + goals
+    python scripts/render_video.py --mode curriculum --seed 1 --camera paper
+
+    # Standard views
     python scripts/render_video.py --mode curriculum --seed 0
     python scripts/render_video.py --mode master_curriculum --seed 0
     python scripts/render_video.py --mode curriculum --seed 1 --camera topdown
@@ -32,12 +36,14 @@ Usage:
     # Zoom out for wider view (zoom=1.5 = 50% farther)
     python scripts/render_video.py --mode curriculum --seed 0 --zoom 1.5
 
-Camera options:
-    follow   — 3rd person, behind+above, slow rotation (DEFAULT, best for paper)
-    topdown  — straight overhead
-    side     — side view
-    fixed    — static angle
-    close    — close-up follow
+Camera options (NO bird's eye flattening):
+    paper          — BEST FOR PAPER FIGURES: close isometric view
+    follow         — 3rd person narrative, good 3D depth
+    isometric      — high angle, shows geometry without flattening
+    side           — side profile (see thruster X-config)
+    front          — AUV approaching goal
+    view_34        — 3/4 view (technical documentation)
+    overhead_angled— angled overhead (maintains depth perception)
 """
 
 import argparse
@@ -68,15 +74,24 @@ HEIGHT = 720
 
 # ── Camera presets ────────────────────────────────────────────
 # distance  = metres from AUV (larger = more zoomed out)
-# elevation = degrees above horizon (negative = looking down)
-# azimuth   = horizontal angle (degrees)
+# elevation = degrees above horizon (negative = looking down, -90 = straight down)
+# azimuth   = horizontal angle in degrees (0=forward, 90=left, -90=right, 135=back-left)
 # offset_z  = vertical shift of lookat point above AUV
 CAMERA_PRESETS = {
-    "follow": dict(distance=10.0, elevation=-35.0, azimuth=135.0, offset_z=0.5),
-    "topdown": dict(distance=18.0, elevation=-89.5, azimuth=90.0, offset_z=0.0),
-    "side": dict(distance=14.0, elevation=-15.0, azimuth=0.0, offset_z=1.0),
-    "fixed": dict(distance=20.0, elevation=-40.0, azimuth=45.0, offset_z=0.0),
-    "close": dict(distance=5.0, elevation=-30.0, azimuth=120.0, offset_z=0.0),
+    # BEST FOR PAPER: Isometric close-up showing AUV structure + thrusters + goals
+    "paper": dict(distance=3.8, elevation=-38.0, azimuth=135.0, offset_z=0.2),
+    # Follow camera: 3rd person narrative view (clear 3D depth)
+    "follow": dict(distance=8.0, elevation=-40.0, azimuth=120.0, offset_z=0.4),
+    # High angle isometric (shows surrounding geometry without bird's eye flatness)
+    "isometric": dict(distance=12.0, elevation=-55.0, azimuth=135.0, offset_z=0.3),
+    # Side profile (shows thruster X-configuration clearly)
+    "side": dict(distance=8.0, elevation=-20.0, azimuth=0.0, offset_z=0.5),
+    # Front view (see AUV approaching goal)
+    "front": dict(distance=6.0, elevation=-25.0, azimuth=180.0, offset_z=0.3),
+    # 3/4 view - best for technical documentation
+    "view_34": dict(distance=5.5, elevation=-32.0, azimuth=225.0, offset_z=0.25),
+    # Angled overhead (shows layout with decent depth perception)
+    "overhead_angled": dict(distance=10.0, elevation=-60.0, azimuth=90.0, offset_z=0.2),
 }
 
 
@@ -224,8 +239,18 @@ def render_frame(
     Uses a simple fixed camera viewpoint (fast and reliable).
     zoom: camera distance multiplier (< 1.0 = closer, > 1.0 = farther)
     """
+    # Create paper-ready rendering options (clean visualization)
+    opt = mujoco.MjvOption()
+    opt.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = False
+    opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = False
+    opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = False
+    opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = False
+    opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
+    opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
+    opt.flags[mujoco.mjtVisFlag.mjVIS_SELECT] = False
+
     # Update scene with current physics state
-    renderer.update_scene(mjdata)
+    renderer.update_scene(mjdata, scene_option=opt)
 
     # For now, use renderer's default camera
     # A fully featured camera system requires deeper mujoco integration
@@ -301,7 +326,7 @@ def render_video(args):
     print(f"\n  Creating renderer {WIDTH}×{HEIGHT}...")
     renderer = mujoco.Renderer(mjmodel, HEIGHT, WIDTH)
     renderer.enable_shadows = False  # faster rendering
-    print("  Renderer ready\n")
+    print("  ✓ Renderer ready (clean visualization: no physics overlays)\n")
 
     # Render loop
     frames = []
